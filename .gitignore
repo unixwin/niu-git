@@ -1,0 +1,5 @@
+/src/
+/build/
+/dist/
+/git-src.tar.gz
+__pycache__/
