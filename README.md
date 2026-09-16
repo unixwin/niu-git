@@ -8,7 +8,12 @@ See `docs/planning/niubash-git.md` in the niubash repo for the full plan.
 
 ## Status
 
-Phase 0 PoC: MSVC + CMake + vcpkg build of git-for-windows v2.55.0.windows.2.
+Phase 0 PoC **done**: MSVC + CMake + vcpkg build of git-for-windows v2.55.0.windows.2.
+
+- `python scripts/build.py` -> `dist/` (MinGit-style layout: `mingw64/bin`, `etc/`)
+- Verified: init/add/commit/log/status, https clone via schannel, sh hooks executed
+  via `sh` found on PATH (niubash shim handoff mechanism confirmed)
+- Bundle: 20 MB / zip 20 MB (MinGit zip: 37 MB) — no MSYS2, no openssl, no perl
 
 ## Build
 

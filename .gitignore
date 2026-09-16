@@ -1,5 +1,8 @@
 /src/
 /build/
 /dist/
-/git-src.tar.gz
+/git-src*.tar.gz
+*.zip
+*.log
+empty.cfg
 __pycache__/

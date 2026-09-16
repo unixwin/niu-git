@@ -56,10 +56,18 @@ def prepare():
 def configure():
     BUILD.mkdir(exist_ok=True)
     cmd = [
-        "cmake", "-S", SRC, "-B", BUILD,
-        "-DNO_VCPKG=TRUE",
+        # NOTE: upstream docs mention -DNO_VCPKG=TRUE but the code never reads
+        # it (docs bug, PR candidate); the real switch is USE_VCPKG.
+        "cmake", "-S", SRC / "contrib" / "buildsystems", "-B", BUILD,
+        "-DUSE_VCPKG=OFF",
+        "-DSKIP_DASHED_BUILT_INS=ON",
+        "-DBUILD_TESTING=OFF",
+        "-DBUILD_TESTING=OFF",
+        "-DSKIP_DASHED_BUILT_INS=ON",
+        "-DBUILD_TESTING=OFF",
+        "-DBUILD_TESTING=OFF",
         f"-DCMAKE_PREFIX_PATH={VCPKG_INSTALLED.as_posix()}",
-        "-DCMAKE_INSTALL_PREFIX=" + (DIST / "git").as_posix(),
+        "-DCMAKE_INSTALL_PREFIX=" + (DIST / "mingw64").as_posix(),  # exe at <root>/mingw64/bin -> system config at <root>/etc (MinGit layout)
     ]
     run(cmd)
 
@@ -68,8 +76,41 @@ def build():
     run(["cmake", "--build", BUILD, "--config", "Release"])
 
 
+# perl-gen custom commands under msbuild silently fail (cwd/env mismatch inside
+# generate-perl.sh); regenerate with absolute paths before install. These
+# scripts get dropped from the final bundle anyway (NO_PERL product decision).
+PERL_SCRIPTS = [
+    "git-archimport", "git-cvsexportcommit", "git-cvsimport",
+    "git-cvsserver", "git-send-email", "git-svn",
+]
+
+
+def gen_perl():
+    sh = shutil.which("sh")
+    for name in PERL_SCRIPTS:
+        run([sh, (SRC / "tools/generate-perl.sh").as_posix(),
+             (BUILD / "GIT-BUILD-OPTIONS").as_posix(),
+             (BUILD / "GIT-VERSION-FILE").as_posix(),
+             (BUILD / "GIT-PERL-HEADER").as_posix(),
+             (SRC / f"{name}.perl").as_posix(),
+             (BUILD / f"{name}.perl").as_posix()])
+
+
 def collect():
+    gen_perl()
     run(["cmake", "--install", BUILD, "--config", "Release"])
+    # Runtime DLLs. The vcpkg libcurl here is the schannel build: TLS goes
+    # through Windows crypt32/bcrypt, no openssl shipped.
+    for dll in ("iconv-2.dll", "zlib1.dll", "libcurl.dll"):
+        src = VCPKG_INSTALLED / "bin" / dll
+        shutil.copy2(src, DIST / "mingw64" / "bin" / dll)
+        shutil.copy2(src, DIST / "mingw64" / "libexec" / "git-core" / dll)
+    # The bundled curl supports schannel only; make it the default so plain
+    # `git clone https://...` works out of the box.
+    etc = DIST / "etc"
+    etc.mkdir(parents=True, exist_ok=True)
+    (etc / "gitconfig").write_text(
+        "[http]\n\tsslBackend = schannel\n", encoding="utf-8", newline="\n")
 
 
 def main():
