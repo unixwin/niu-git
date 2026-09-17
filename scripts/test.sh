@@ -15,6 +15,23 @@ WROOT=$(cygpath -w "$ROOT")
 GLOB="${1:-t0*}"
 JOBS="${JOBS:-4}"
 
+# Strip host-exported safe-delete function wrappers (WorkBuddy/CodeBuddy
+# exports rm/rmdir/unlink as functions via BASH_FUNC_* environment vars).
+# They hijack every `rm` inside the test suite: bulk deletes hit node.exe
+# "Argument list too long" and the safe-delete quarantine poisons test
+# cleanup — this single artifact caused ~2200 phantom failures in
+# t0027-auto-crlf alone.
+#
+# unset -f only affects THIS shell: every test file is executed by a fresh
+# `sh` spawned from xargs, and bash re-imports functions from the
+# BASH_FUNC_* environment on startup. So re-exec ourselves via `env -u`
+# to scrub the environment for all descendants.
+if env 2>/dev/null | grep -Eq '^BASH_FUNC_(rm|rmdir|unlink)%%='; then
+    exec env -u BASH_FUNC_rm%% -u BASH_FUNC_rmdir%% -u BASH_FUNC_unlink%% \
+        "$0" "$@"
+fi
+unset -f rm rmdir unlink 2>/dev/null
+
 export PATH="/d/vcpkg/installed/x64-windows/bin:$PATH"
 # Symlink behavior: without this, Git Bash degrades `ln -s` to a copy and
 # symlink-sensitive test files fail wholesale (verified: t1423 0/36 -> 36/36).
