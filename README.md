@@ -31,6 +31,14 @@ env -u MSYS_NO_PATHCONV -u MSYS2_ARG_CONV_EXCL -u MSYS \
 Logs land in `testlog/`; the script prints an ok/notok aggregate. Baseline
 t0001-init: 102/103 (only `includeIf.onbranch` re-init edge case fails).
 
+## WPM package
+
+`wpm/niugit.json` is the ready-to-merge official-index entry (schema 1,
+`layout: shim`). It points at the future GitHub Release URL; the `sha256` and
+`size` match the local build `niu-git-2.55.0.windows.2-x64.zip` (regenerate +
+rehash on every release). The existing `git` entry (MinGit) stays untouched
+until niu-git is promoted to be the default.
+
 ## Build
 
 ```
