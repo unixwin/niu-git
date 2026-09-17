@@ -13,7 +13,16 @@
 # Optional env: JOBS (parallel test files, default 4), GLOB via $1 (default t0*).
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WROOT=$(cygpath -w "$ROOT")
-GLOB="${1:-t[01]*}"
+# Glob selection: $1 wins; otherwise scripts/test-globs.txt (one glob per
+# line, for background runs where the host wrapper mangles shell args);
+# otherwise the default full scope.
+if [ -n "$1" ]; then
+    GLOB="$1"
+elif [ -f "$ROOT/scripts/test-globs.txt" ]; then
+    GLOB=$(tr '\n' ' ' < "$ROOT/scripts/test-globs.txt")
+else
+    GLOB="t[01]*"
+fi
 JOBS="${JOBS:-4}"
 
 # Host arg-conversion poisons every absolute-path argument to git.exe.
