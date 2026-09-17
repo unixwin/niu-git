@@ -32,6 +32,20 @@ Notes:
 - Known env trap: `MSYS_NO_PATHCONV=1` (set by niubash/WorkBuddy hosts) silently
   breaks every absolute-path argument to the native git.exe.
 
+## Addendum (same day)
+
+- **Symlink fix verified**: `MSYS=winsymlinks:nativestrict` repairs the whole
+  0-ok family (t1423-ref-backend 0/36 -> 36/36 standalone). `scripts/test.sh`
+  now exports it by default. The run1 numbers above include that noise; expect
+  the symlink family (~350) and parts of reftable/refs to recover on rerun.
+- Full clean rerun deferred: the host safe-delete hook started blocking
+  test-lib's bulk trash-directory cleanup mid-run
+  (`SAFE_DELETE_BULK_CONFIRM_REQUIRED`), bailing every file out at setup.
+  Rerun in a fresh session/turn (and consider keeping `testlog/` out of the
+  hook's scope). Real product-level failure families that survived: eol/crlf
+  (~2280, t0027 dominant) and path-format diffs (~450) — these need
+  Git-for-Windows-style test patches, not env fixes.
+
 ## Next triage order
 
 1. Re-run with `MSYS=winsymlinks:nativestrict` (expect big recovery in 0-ok files)
