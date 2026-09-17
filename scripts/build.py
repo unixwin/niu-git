@@ -53,6 +53,27 @@ def prepare():
     inner.rmdir()
 
 
+def apply_patches():
+    """Apply patches/*.patch to src/ (idempotent: -N skips already-applied)."""
+    patches = sorted((ROOT / "patches").glob("*.patch"))
+    if not patches:
+        return
+    sh = shutil.which("sh")
+    for p in patches:
+        print(f"applying {p.name}")
+        # `patch -N` exits 1 when the patch is already applied (skip);
+        # treat that as success, anything else is a real failure.
+        proc = subprocess.run(
+            [sh, "-c",
+             f"patch -d '{SRC.as_posix()}' -p1 -N -r - < '{p.as_posix()}'"],
+            capture_output=True, text=True)
+        output = proc.stdout + proc.stderr
+        if proc.returncode == 0 or "Skipping patch" in output:
+            continue
+        print(output, file=sys.stderr)
+        raise SystemExit(f"patch failed: {p.name}")
+
+
 def configure():
     BUILD.mkdir(exist_ok=True)
     cmd = [
@@ -61,10 +82,6 @@ def configure():
         "cmake", "-S", SRC / "contrib" / "buildsystems", "-B", BUILD,
         "-DUSE_VCPKG=OFF",
         "-DSKIP_DASHED_BUILT_INS=ON",
-        "-DBUILD_TESTING=OFF",
-        "-DBUILD_TESTING=OFF",
-        "-DSKIP_DASHED_BUILT_INS=ON",
-        "-DBUILD_TESTING=OFF",
         "-DBUILD_TESTING=OFF",
         f"-DCMAKE_PREFIX_PATH={VCPKG_INSTALLED.as_posix()}",
         "-DCMAKE_INSTALL_PREFIX=" + (DIST / "mingw64").as_posix(),  # exe at <root>/mingw64/bin -> system config at <root>/etc (MinGit layout)
@@ -121,6 +138,7 @@ def main():
 
     if args.prepare or not SRC.exists():
         prepare()
+    apply_patches()
     if not args.skip_configure:
         configure()
     build()

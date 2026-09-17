@@ -1,0 +1,20 @@
+--- a/http.c	2026-09-17 00:54:56.088578600 +0800
++++ b/http.c	2026-09-17 00:55:02.203275400 +0800
+@@ -1461,6 +1461,17 @@
+ 
+ 		switch (curl_global_sslset(-1, http_ssl_backend, &backends)) {
+ 		case CURLSSLSET_UNKNOWN_BACKEND:
++			if (backends[0] && !backends[1]) {
++				/*
++				 * Single-backend build (e.g. schannel-only):
++				 * a stale http.sslBackend inherited from
++				 * another Git distribution must not make Git
++				 * unusable; fall back to the only backend.
++				 */
++				warning(_("Ignoring unavailable SSL backend '%s'; using '%s' instead"),
++					http_ssl_backend, backends[0]->name);
++				break; /* Okay: only one backend exists */
++			}
+ 			strbuf_addf(&buf, _("Unsupported SSL backend '%s'. "
+ 					    "Supported SSL backends:"),
+ 					    http_ssl_backend);
