@@ -19,10 +19,23 @@ TARBALL = ROOT / f"git-src-{GIT_TAG}.tar.gz"
 SRC = ROOT / "src"
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
+VCPKG_INSTALLED = VCPKG_ROOT / "installed" / "x64-windows"
+ARCH_FLAG = []
+
+
+def use_arch(arch):
+    """Retarget build/dist/vcpkg triplet directories for x64 or arm64."""
+    global BUILD, DIST, VCPKG_INSTALLED, ARCH_FLAG
+    if arch == "x64":
+        return
+    BUILD = ROOT / f"build-{arch}"
+    DIST = ROOT / f"dist-{arch}"
+    VCPKG_INSTALLED = VCPKG_ROOT / "installed" / f"{arch}-windows"
+    ARCH_FLAG = ["-A", arch.upper()]
 
 # PoC links against the classic-mode vcpkg install (zlib/curl already built).
 # Later: manifest mode with curl[schannel] + static triplets.
-VCPKG_INSTALLED = Path("D:/vcpkg/installed/x64-windows")
+VCPKG_ROOT = Path("D:/vcpkg")
 
 
 def run(cmd, **kw):
@@ -80,6 +93,7 @@ def configure():
         # NOTE: upstream docs mention -DNO_VCPKG=TRUE but the code never reads
         # it (docs bug, PR candidate); the real switch is USE_VCPKG.
         "cmake", "-S", SRC / "contrib" / "buildsystems", "-B", BUILD,
+        *ARCH_FLAG,
         "-DUSE_VCPKG=OFF",
         "-DSKIP_DASHED_BUILT_INS=ON",
         "-DBUILD_TESTING=OFF",
@@ -134,8 +148,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prepare", action="store_true", help="re-download/extract source")
     ap.add_argument("--skip-configure", action="store_true")
+    ap.add_argument("--arch", choices=["x64", "arm64"], default="x64")
     args = ap.parse_args()
 
+    use_arch(args.arch)
     if args.prepare or not SRC.exists():
         prepare()
     apply_patches()

@@ -42,8 +42,10 @@ until niu-git is promoted to be the default.
 ## Build
 
 ```
-python scripts/build.py            # configure + build + collect into dist/
+python scripts/build.py            # x64: configure + build + collect into dist/
 python scripts/build.py --prepare  # re-fetch/extract upstream tarball
+python scripts/build.py --arch arm64   # needs the "MSVC ARM64 build tools"
+                                       # VS component (not installed here yet)
 ```
 
 Source code is NEVER committed here: CI pulls the upstream tarball and applies
