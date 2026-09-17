@@ -13,7 +13,7 @@
 # Optional env: JOBS (parallel test files, default 4), GLOB via $1 (default t0*).
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WROOT=$(cygpath -w "$ROOT")
-GLOB="${1:-t0*}"
+GLOB="${1:-t[01]*}"
 JOBS="${JOBS:-4}"
 
 # Host arg-conversion poisons every absolute-path argument to git.exe.
