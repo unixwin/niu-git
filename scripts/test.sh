@@ -16,6 +16,9 @@ GLOB="${1:-t0*}"
 JOBS="${JOBS:-4}"
 
 export PATH="/d/vcpkg/installed/x64-windows/bin:$PATH"
+# Symlink behavior: without this, Git Bash degrades `ln -s` to a copy and
+# symlink-sensitive test files fail wholesale (verified: t1423 0/36 -> 36/36).
+export MSYS="${MSYS:-winsymlinks:nativestrict}"
 export TEST_DIRECTORY="${WROOT}\\src\\t"
 export GIT_BUILD_DIR="${WROOT}\\build"
 export TESTLOG="$ROOT/testlog"
