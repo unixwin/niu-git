@@ -7,6 +7,7 @@ Repo layout rules:
 - Build output lands in build/, distributable layout in dist/.
 """
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -107,6 +108,26 @@ def build():
     run(["cmake", "--build", BUILD, "--config", "Release"])
 
 
+# Server-side dashed forms (git-upload-pack etc.). Upstream Makefile marks
+# them "special": they must exist even though they are hardlinks of git.exe,
+# because remote helpers / bin-wrappers invoke them by dashed name. CMake's
+# install stage creates them unconditionally (bin_links, not gated by
+# SKIP_DASHED_BUILT_INS) so the product bundle is fine, but the *build tree*
+# only gets them via the git-links target, which SKIP_DASHED_BUILT_INS=ON
+# skips — breaking every test that clones over local/file transport
+# ("build/git-upload-pack.exe: No such file or directory"). Recreate the
+# three in the build tree so bin-wrappers work; the dist stays lean.
+SERVER_DASHED = ["git-upload-pack", "git-receive-pack", "git-upload-archive"]
+
+
+def link_server_dashed():
+    git_exe = BUILD / "git.exe"
+    for name in SERVER_DASHED:
+        target = BUILD / f"{name}.exe"
+        if not target.exists():
+            os.link(git_exe, target)
+
+
 # perl-gen custom commands under msbuild silently fail (cwd/env mismatch inside
 # generate-perl.sh); regenerate with absolute paths before install. These
 # scripts get dropped from the final bundle anyway (NO_PERL product decision).
@@ -158,6 +179,7 @@ def main():
     if not args.skip_configure:
         configure()
     build()
+    link_server_dashed()
     collect()
     print("done.")
 
