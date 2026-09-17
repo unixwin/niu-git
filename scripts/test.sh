@@ -1,19 +1,27 @@
 #!/bin/sh
 # Run upstream git test suite (subset) against the CMake build.
 #
-# MUST be launched from real Git Bash with MSYS path conversion enabled
-# (the WorkBuddy/CodeBuddy host sets MSYS_NO_PATHCONV=1 and
-# MSYS2_ARG_CONV_EXCL=* globally, which breaks absolute-path args to the
-# native git.exe). Recommended invocation:
+# MUST be launched with real Git Bash, e.g.:
 #
-#   env -u MSYS_NO_PATHCONV -u MSYS2_ARG_CONV_EXCL -u MSYS \
-#     "/c/Program Files/Git/bin/bash.exe" scripts/test.sh [glob]
+#   "/c/Program Files/Git/bin/bash.exe" scripts/test.sh [glob]
+#
+# (The WorkBuddy/CodeBuddy host sets MSYS_NO_PATHCONV=1 and
+# MSYS2_ARG_CONV_EXCL=* globally, which breaks absolute-path args to the
+# native git.exe; we unset them below — plain env vars, so unset
+# propagates to all descendant processes.)
 #
 # Optional env: JOBS (parallel test files, default 4), GLOB via $1 (default t0*).
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WROOT=$(cygpath -w "$ROOT")
 GLOB="${1:-t0*}"
 JOBS="${JOBS:-4}"
+
+# Host arg-conversion poisons every absolute-path argument to git.exe.
+unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+# Force deterministic symlink behavior: without it Git Bash degrades
+# `ln -s` to a copy and symlink-sensitive test files fail wholesale
+# (verified: t1423 0/36 -> 36/36).
+export MSYS=winsymlinks:nativestrict
 
 # Strip host-exported safe-delete function wrappers (WorkBuddy/CodeBuddy
 # exports rm/rmdir/unlink as functions via BASH_FUNC_* environment vars).
@@ -33,9 +41,6 @@ fi
 unset -f rm rmdir unlink 2>/dev/null
 
 export PATH="/d/vcpkg/installed/x64-windows/bin:$PATH"
-# Symlink behavior: without this, Git Bash degrades `ln -s` to a copy and
-# symlink-sensitive test files fail wholesale (verified: t1423 0/36 -> 36/36).
-export MSYS="${MSYS:-winsymlinks:nativestrict}"
 export TEST_DIRECTORY="${WROOT}\\src\\t"
 export GIT_BUILD_DIR="${WROOT}\\build"
 export TESTLOG="$ROOT/testlog"
