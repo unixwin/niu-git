@@ -56,7 +56,17 @@ export TESTLOG="$ROOT/testlog"
 mkdir -p "$TESTLOG"
 
 cd "$ROOT/src/t" || exit 1
-ls $GLOB.sh | xargs -P "$JOBS" -I{} sh -c 'exec sh "$1" > "$TESTLOG/$1.log" 2>&1' _ {}
+# Build the explicit test list: expand each glob in src/t, keep only real
+# files. Deterministic — no reliance on ls-pipe behavior. NOTE: patterns
+# must NOT carry a trailing ".*"; the ".sh" suffix is appended here, and
+# "name.*.sh" would never match "name.sh" (double-dot requirement).
+TESTS=""
+for g in $GLOB; do
+    for f in $g.sh; do
+        [ -f "$f" ] && TESTS="$TESTS $f"
+    done
+done
+printf '%s\n' $TESTS | xargs -P "$JOBS" -I{} sh -c 'exec sh "$1" > "$TESTLOG/$1.log" 2>&1' _ {}
 
 echo "== aggregate =="
 total_ok=0; total_notok=0; failed_files=""
