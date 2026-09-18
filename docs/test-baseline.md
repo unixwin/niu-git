@@ -52,6 +52,64 @@ t0027-auto-crlf 260/261 (the 1 was a host-harness artifact, see below).
   (verified with both coreutils 8.32 copies). Suspected filter-driver /
   Defender update at that moment. Fix attempt: reboot, then rerun
   `scripts/test.sh` (36-file globs subset committed in scripts/test-globs.txt).
+- **2026-09-18 triage (3 rounds)**: still invalid as a *pass-rate* baseline
+  (machine anomaly active), but produced three real fixes and a candidate
+  list (below).
+
+## Fixes landed 2026-09-18
+
+1. **t-perl-shim eval-quoting** (7ed2701): the shim rebuilt the command
+   line as a quoted string + eval, so perl one-liners containing
+   backslashes (hex2oct's `printf "\\%03o"`) were re-parsed by the shell
+   and corrupted → t1007 32-34 false failures. Rewritten to round-trip
+   args through positional parameters; shipped via
+   `build.py install_perl_shim()`. Verified: t1007 44/44.
+2. **POSIX-form TEST_DIRECTORY/GIT_BUILD_DIR** (3a34b92): Windows-form
+   paths in PATH are invisible to MSYS lookup — every bare `test-tool`
+   invocation died "command not found" (stderr swallowed into the helper
+   `perf` file). t1419 3/13 → 13/13, t1450 96 ok / 0 fail.
+3. **BASH_ENV scrub** (7ed2701): the host shell-runtime shim re-defines
+   `rm` in every non-interactive bash via BASH_ENV; `env -u BASH_FUNC_*`
+   alone is insufficient. Runners re-exec with `-u BASH_ENV` too.
+
+## Machine anomaly status (blocks a final clean baseline)
+
+Still present without reboot, **now drive-agnostic**: batch
+`update-ref --stdin` transactions with nested ref paths
+(`refs/heads/foo/1`) + `pack-refs --all` silently lose all refs and
+(loosely) objects — packed-refs ends up header-only. Reproduced 3/3 with
+**official Git for Windows 2.55.0.windows.3**, on C:\ (intermittent,
+worse under load) and D:\ (persistent). Single-ref updates are fine.
+Downstream: `git prune` deletes reachable objects (ref enumeration sees
+nothing). This poisons every test whose setup creates nested refs in a
+single transaction (t1408/t1419/t1460/t1461/... in the 09-18 runs).
+Verification recipe (does NOT need the niu-git build):
+
+```
+git init -q -b main d && cd d && echo x>f && git add f && git commit -qm c
+bb=$(git rev-parse HEAD)
+{ for n in a b c; do echo "create refs/heads/$n/x $bb"; done; } | git update-ref --stdin
+git pack-refs --all && git show-ref | wc -l   # 3 = healthy, 0 = anomaly active
+```
+
+## Candidate real product issues (post-reboot triage queue)
+
+Consistently reproduced across the 09-18 runs regardless of anomaly
+phase; still need one clean confirmation each after reboot:
+
+| Candidate | Tests | Notes |
+|---|---|---|
+| sparse-checkout | t1091 (10), t1092 (14 + t/o) | cone mode, worktrees, merge conflicts |
+| submodule ops hang | t1013 t/o, t1006 #257 | read-tree-submodule times out on C: too |
+| safe.directory normalization | t0033 (6) | checked/configured path normalization, dot, asterisk |
+| --follow-symlinks prep | t1006 #225-244 | root cause = test 225 prep failure |
+| path-utils | t0060 (3) | real-path-on-symlinks ×2, MSYSTEM/PATH adjustment |
+| reffiles fsck | t0602 (3) | ref name check, symlink symref content |
+| @{-1} in check-ref-format --branch | t1402 (2) | #82, #84 |
+| promisor.quiet in submodule | t0410 #38 | |
+| delayed checkout submodule collision | t0021 #33 | |
+| rev-parse --push / at-combinations | t1514 (6), t1508 (2) | |
+| repo structure / subdirectory symlink | t1901 (1), t1020 #15 | |
 
 ## How to reproduce
 
