@@ -43,10 +43,11 @@ export MSYS=winsymlinks:nativestrict
 # `sh` spawned from xargs, and bash re-imports functions from the
 # BASH_FUNC_* environment on startup. So re-exec ourselves via `env -u`
 # to scrub the environment for all descendants.
-if env 2>/dev/null | grep -Eq '^BASH_FUNC_(rm|rmdir|unlink)%%='; then
-    exec env -u BASH_FUNC_rm%% -u BASH_FUNC_rmdir%% -u BASH_FUNC_unlink%% \
-        "$0" "$@"
+if env 2>/dev/null | grep -Eq '^BASH_ENV=|^BASH_FUNC_(rm|rmdir|unlink)%%='; then
+    exec env -u BASH_ENV -u BASH_FUNC_rm%% -u BASH_FUNC_rmdir%% \
+        -u BASH_FUNC_unlink%% "$0" "$@"
 fi
+unset BASH_ENV
 unset -f rm rmdir unlink 2>/dev/null
 
 export PATH="/d/vcpkg/installed/x64-windows/bin:$PATH"

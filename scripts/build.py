@@ -8,6 +8,7 @@ Repo layout rules:
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -128,6 +129,25 @@ def link_server_dashed():
             os.link(git_exe, target)
 
 
+def install_perl_shim():
+    # CMake hardcodes PERL_PATH=/usr/bin/perl (MSYS perl), which does not
+    # exist on niu-git build machines. Ship scripts/t-perl-shim/perl (maps
+    # MSYS paths for Strawberry perl) into build/ and point
+    # GIT-BUILD-OPTIONS at it, or every PERL_TEST_HELPERS test dies.
+    opts = BUILD / "GIT-BUILD-OPTIONS"
+    if not opts.exists():
+        return
+    text = opts.read_text()
+    if "t-perl-shim" in text:
+        return
+    shim_dst = BUILD / "t-perl-shim" / "perl"
+    shim_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "scripts" / "t-perl-shim" / "perl", shim_dst)
+    opts.write_text(re.sub(r"PERL_PATH=.*",
+                           f"PERL_PATH='{shim_dst.as_posix()}'", text))
+    print("installed t-perl-shim, PERL_PATH ->", shim_dst)
+
+
 # perl-gen custom commands under msbuild silently fail (cwd/env mismatch inside
 # generate-perl.sh); regenerate with absolute paths before install. These
 # scripts get dropped from the final bundle anyway (NO_PERL product decision).
@@ -180,6 +200,7 @@ def main():
         configure()
     build()
     link_server_dashed()
+    install_perl_shim()
     collect()
     print("done.")
 

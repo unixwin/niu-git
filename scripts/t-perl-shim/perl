@@ -1,0 +1,44 @@
+#!/bin/sh
+# Shim: run Strawberry (native Windows) perl from MSYS sh, converting
+# MSYS-style path arguments to Windows paths. Used only by the git test
+# suite on niu-git build machines that lack an MSYS perl (/usr/bin/perl).
+#
+# NOTE: arguments must be passed to perl VERBATIM — perl one-liners from
+# the test suite routinely contain backslashes (e.g. hex2oct's
+#   perl -ne 'printf "\\%03o", hex for /../g'
+# ) and an earlier version of this shim rebuilt the command line as a
+# quoted string + eval, which let the shell re-parse those backslashes
+# and corrupted the perl code. Round-trip through positional parameters
+# instead; never build a command string.
+
+PERL_REAL=/c/Strawberry/perl/bin/perl.exe
+
+n=$#
+i=0
+while [ "$i" -lt "$n" ]; do
+    a=$1
+    shift
+    case "$a" in
+    -I/*)
+        w=$(cygpath -w "${a#-I}" 2>/dev/null)
+        [ -n "$w" ] && a="-I$w"
+        ;;
+    /*)
+        # A bare absolute MSYS path (script file, etc.) -> Windows path.
+        w=$(cygpath -w "$a" 2>/dev/null)
+        [ -n "$w" ] && a="$w"
+        ;;
+    esac
+    set -- "$@" "$a"
+    i=$((i + 1))
+done
+
+# Git's perl lib (GITPERLLIB / PERL5LIB) is an MSYS path for Windows perl.
+if [ -n "$GITPERLLIB" ]; then
+    w=$(cygpath -w "$GITPERLLIB" 2>/dev/null)
+    if [ -n "$w" ]; then
+        export PERL5LIB="$w${PERL5LIB:+;$PERL5LIB}"
+    fi
+fi
+
+exec "$PERL_REAL" "$@"
