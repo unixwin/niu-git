@@ -51,8 +51,8 @@ unset BASH_ENV
 unset -f rm rmdir unlink 2>/dev/null
 
 export PATH="/d/vcpkg/installed/x64-windows/bin:$PATH"
-export TEST_DIRECTORY="${WROOT}\\src\\t"
-export GIT_BUILD_DIR="${WROOT}\\build"
+export TEST_DIRECTORY="$ROOT/src/t"
+export GIT_BUILD_DIR="$ROOT/build"
 export TESTLOG="$ROOT/testlog"
 mkdir -p "$TESTLOG"
 

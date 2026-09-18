@@ -14,8 +14,8 @@ export MSYS=winsymlinks:nativestrict
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT/src/t" || exit 1
-export TEST_DIRECTORY="${ROOT}\\src\\t"
-export GIT_BUILD_DIR="${ROOT}\\build"
+export TEST_DIRECTORY="$ROOT/src/t"
+export GIT_BUILD_DIR="$ROOT/build"
 export PATH="/d/vcpkg/installed/x64-windows/bin:$PATH"
 
 OUT="$ROOT/triage-standalone"
@@ -24,7 +24,10 @@ mkdir -p "$OUT"
 
 for t in "$@"; do
     log="$OUT/$t.log"
-    timeout 1200 "./$t.sh" > "$log" 2>&1
+    # TRASH_ROOT: optional --root override so trash directories (heavy
+    # create/delete churn) land on a different drive. Used to bypass the
+    # D:\ machine-level anomaly that silently drops refs/objects writes.
+    timeout 1200 "./$t.sh" ${TRASH_ROOT:+--root="$TRASH_ROOT"} > "$log" 2>&1
     rc=$?
     ok=$(grep -c '^ok ' "$log")
     notok=$(grep '^not ok' "$log" | grep -vc 'TODO')
