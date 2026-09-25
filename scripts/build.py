@@ -21,6 +21,10 @@ TARBALL = ROOT / f"git-src-{GIT_TAG}.tar.gz"
 SRC = ROOT / "src"
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
+
+# PoC links against the classic-mode vcpkg install (zlib/curl already built).
+# Later: manifest mode with curl[schannel] + static triplets.
+VCPKG_ROOT = Path("D:/vcpkg")
 VCPKG_INSTALLED = VCPKG_ROOT / "installed" / "x64-windows"
 ARCH_FLAG = []
 
@@ -34,10 +38,6 @@ def use_arch(arch):
     DIST = ROOT / f"dist-{arch}"
     VCPKG_INSTALLED = VCPKG_ROOT / "installed" / f"{arch}-windows"
     ARCH_FLAG = ["-A", arch.upper()]
-
-# PoC links against the classic-mode vcpkg install (zlib/curl already built).
-# Later: manifest mode with curl[schannel] + static triplets.
-VCPKG_ROOT = Path("D:/vcpkg")
 
 
 def run(cmd, **kw):
@@ -168,9 +168,25 @@ def gen_perl():
              (BUILD / f"{name}.perl").as_posix()])
 
 
+# Root entry launcher: wpm's shim layout forwards "git" to the package root,
+# and a bare git.exe copy there breaks RUNTIME_PREFIX discovery. See
+# scripts/entry/launch-git.c. Built with a dedicated CMake project so the
+# entry gets a clean /MT static build (zero deps, like git itself).
+def build_entry():
+    entry_build = ROOT / "build-entry"
+    run(["cmake", "-S", ROOT / "scripts" / "entry", "-B", entry_build])
+    run(["cmake", "--build", entry_build, "--config", "Release"])
+    exe = entry_build / "Release" / "git.exe"
+    if not exe.exists():
+        raise SystemExit(f"entry build produced nothing: {exe}")
+    shutil.copy2(exe, DIST / "git.exe")
+    print("entry launcher ->", DIST / "git.exe")
+
+
 def collect():
     gen_perl()
     run(["cmake", "--install", BUILD, "--config", "Release"])
+    build_entry()
     # Runtime DLLs. The vcpkg libcurl here is the schannel build: TLS goes
     # through Windows crypt32/bcrypt, no openssl shipped.
     for dll in ("iconv-2.dll", "zlib1.dll", "libcurl.dll"):
@@ -189,10 +205,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prepare", action="store_true", help="re-download/extract source")
     ap.add_argument("--skip-configure", action="store_true")
+    ap.add_argument("--entry-only", action="store_true",
+                    help="only build the root entry launcher into dist/")
     ap.add_argument("--arch", choices=["x64", "arm64"], default="x64")
     args = ap.parse_args()
 
     use_arch(args.arch)
+    if args.entry_only:
+        build_entry()
+        print("done (entry-only).")
+        return
     if args.prepare or not SRC.exists():
         prepare()
     apply_patches()
