@@ -22,24 +22,12 @@
           "to": "mingw64/"
         },
         {
-          "from": "mingw64/bin/libcurl.dll",
-          "to": "libcurl.dll"
-        },
-        {
-          "from": "mingw64/bin/zlib1.dll",
-          "to": "zlib1.dll"
-        },
-        {
-          "from": "mingw64/bin/iconv-2.dll",
-          "to": "iconv-2.dll"
-        },
-        {
-          "from": "mingw64/bin/git.exe",
-          "to": "git.exe"
-        },
-        {
           "from": "etc/",
           "to": "etc/"
+        },
+        {
+          "from": "git.exe",
+          "to": "git.exe"
         }
       ],
       "size": 21321170,
