@@ -74,6 +74,7 @@ def apply_patches():
     if not patches:
         return
     sh = shutil.which("sh")
+    git = shutil.which("git")
     for p in patches:
         print(f"applying {p.name}")
         # `patch -N` exits 1 when the patch is already applied (skip);
@@ -85,6 +86,22 @@ def apply_patches():
         output = proc.stdout + proc.stderr
         if proc.returncode == 0 or "Skipping patch" in output:
             continue
+        # Some Windows patch(1) builds (busybox-style) mishandle `-d dir`
+        # with a/ b/ prefixes and die on the first hunk. git apply is an
+        # equivalent fallback for these unified diffs and git is always
+        # available in this project's dev/CI environments. It must run from
+        # the repo root with a relative --directory: from a subdirectory git
+        # sets a prefix and silently skips paths outside it ("Skipped patch"),
+        # and --directory rejects absolute paths.
+        if git:
+            rel_src = os.path.relpath(SRC, ROOT)
+            proc2 = subprocess.run(
+                [git, "apply", "-p1", f"--directory={rel_src}", str(p)],
+                capture_output=True, text=True, cwd=ROOT)
+            output2 = proc2.stdout + proc2.stderr
+            if proc2.returncode == 0 or "already exists" in output2:
+                continue
+            output += "\n" + output2
         print(output, file=sys.stderr)
         raise SystemExit(f"patch failed: {p.name}")
 

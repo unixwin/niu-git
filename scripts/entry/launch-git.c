@@ -6,9 +6,20 @@
 // and PATH-based DLL lookup all resolve relative to mingw64/bin), so https
 // remote helpers and init templates die. This tiny launcher keeps the real
 // exe in mingw64/bin and just pins the environment before forwarding.
+//
+// argv fidelity: arguments are forwarded byte-exactly. The child command
+// line is built with standard Windows quoting rules (quote only when the
+// argument is empty or contains space/tab/quote; inside quotes, double the
+// backslashes preceding a quote, emit an embedded quote as \", and double
+// trailing backslashes before the closing quote). Re-quoting with
+// unconditional "..." wrappers corrupts any argument that itself contains a
+// quote or ends in a backslash (commit -m payloads, pathspecs like D:\dir\),
+// so that must never be done here.
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <wchar.h>
 
 static void join(WCHAR *dst, size_t cap, const WCHAR *dir, const WCHAR *rest)
 {
@@ -16,12 +27,52 @@ static void join(WCHAR *dst, size_t cap, const WCHAR *dir, const WCHAR *rest)
     dst[cap - 1] = 0;
 }
 
-static void quote_append(WCHAR *dst, size_t cap, const WCHAR *arg)
+/* Longest possible quoted form of arg: every char doubled (backslash runs)
+ * plus two quotes plus one separator. */
+static size_t quoted_cap(const WCHAR *arg)
 {
-    size_t len = wcslen(dst);
-    dst += len;
-    cap -= len;
-    _snwprintf(dst, cap, L"\"%s\" ", arg);
+    return 2 * wcslen(arg) + 3;
+}
+
+/* Append arg to d using standard Windows command-line quoting; returns the
+ * advanced position. See "Everyone quotes command line arguments the wrong
+ * way" — the rules implemented by CommandLineToArgvW and the MSVCRT. */
+static WCHAR *append_quoted(WCHAR *d, const WCHAR *arg)
+{
+    const WCHAR *p;
+    size_t bs;
+    int special = (arg[0] == L'\0') || wcspbrk(arg, L" \t\"") != NULL;
+
+    if (!special) {
+        size_t n = wcslen(arg);
+        wmemcpy(d, arg, n);
+        d += n;
+        *d++ = L' ';
+        return d;
+    }
+
+    *d++ = L'"';
+    for (p = arg; ; ) {
+        bs = 0;
+        while (*p == L'\\') { bs++; p++; }
+        if (*p == L'"') {
+            /* backslashes before a quote double, quote becomes \" */
+            while (bs--) { *d++ = L'\\'; *d++ = L'\\'; }
+            *d++ = L'\\';
+            *d++ = L'"';
+            p++;
+        } else if (*p == L'\0') {
+            /* backslashes before the closing quote double */
+            while (bs--) { *d++ = L'\\'; *d++ = L'\\'; }
+            break;
+        } else {
+            while (bs--) *d++ = L'\\';
+            *d++ = *p++;
+        }
+    }
+    *d++ = L'"';
+    *d++ = L' ';
+    return d;
 }
 
 int wmain(int argc, WCHAR **argv)
@@ -60,9 +111,22 @@ int wmain(int argc, WCHAR **argv)
     new_path[32767] = 0;
     SetEnvironmentVariableW(L"PATH", new_path);
 
-    WCHAR cmdline[32768] = L"\"git.exe\" ";
+    /* Build the child command line: "git.exe" followed by the arguments,
+     * quoted per standard rules so each argument round-trips byte-exactly. */
+    size_t cap = 16; /* "git.exe" + space + NUL */
     for (int i = 1; i < argc; i++)
-        quote_append(cmdline, 32768, argv[i]);
+        cap += quoted_cap(argv[i]);
+    WCHAR *cmdline = malloc(cap * sizeof(WCHAR));
+    if (!cmdline) {
+        fprintf(stderr, "git: launcher out of memory\n");
+        return 127;
+    }
+    WCHAR *d = cmdline;
+    *d++ = L'"'; *d++ = L'g'; *d++ = L'i'; *d++ = L't';
+    *d++ = L'.'; *d++ = L'e'; *d++ = L'x'; *d++ = L'e'; *d++ = L'"'; *d++ = L' ';
+    for (int i = 1; i < argc; i++)
+        d = append_quoted(d, argv[i]);
+    *d = L'\0';
 
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
@@ -71,8 +135,10 @@ int wmain(int argc, WCHAR **argv)
     memset(&pi, 0, sizeof(pi));
     if (!CreateProcessW(real, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
         fprintf(stderr, "git: launcher CreateProcess failed (%lu)\n", GetLastError());
+        free(cmdline);
         return 127;
     }
+    free(cmdline);
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 1;
     GetExitCodeProcess(pi.hProcess, &code);

@@ -2,7 +2,7 @@ diff --git a/compat/mingw.c b/compat/mingw.c
 index 92946af..599e1fe 100644
 --- a/compat/mingw.c
 +++ b/compat/mingw.c
-@@ -4385,6 +4385,70 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
+@@ -4385,6 +4385,89 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  #endif
  #endif
  
@@ -70,10 +70,29 @@ index 92946af..599e1fe 100644
 +	return converted;
 +}
 +
++/*
++ * niu-git: message option values are payload text, not paths. Never
++ * POSIX-convert the token following these options (commit/tag/notes
++ * "-m <msg>" and "--message <msg>"). Attached value forms (-m<val>,
++ * --message=<val>) are single tokens starting with '-' and can never
++ * look like a POSIX path, so only the detached forms need the guard.
++ * -F/--file values are genuine file paths and keep benefiting from
++ * the exists-checked conversion.
++ */
++static int wargv_value_is_message(int i, const wchar_t **wargv)
++{
++	const wchar_t *prev;
++
++	if (i < 1)
++		return 0;
++	prev = wargv[i - 1];
++	return !wcscmp(prev, L"-m") || !wcscmp(prev, L"--message");
++}
++
  /*
   * We implement wmain() and compile with -municode, which would
   * normally ignore main(), but we call the latter from the former
-@@ -4422,7 +4486,8 @@ int wmain(int argc, const wchar_t **wargv)
+@@ -4422,7 +4505,8 @@ int wmain(int argc, const wchar_t **wargv)
  	/* determine size of argv and environ conversion buffer */
  	maxlen = wcslen(wargv[0]);
  	for (i = 1; i < argc; i++)
@@ -83,15 +102,18 @@ index 92946af..599e1fe 100644
  
  	/* allocate buffer (wchar_t encodes to max 3 UTF-8 bytes) */
  	maxlen = 3 * maxlen + 1;
-@@ -4435,8 +4500,12 @@ int wmain(int argc, const wchar_t **wargv)
+@@ -4435,8 +4519,15 @@ int wmain(int argc, const wchar_t **wargv)
  	 */
  	ALLOC_ARRAY(argv, argc + 1);
  	ALLOC_ARRAY(save, argc + 1);
 -	for (i = 0; i < argc; i++)
 -		argv[i] = save[i] = wcstoutfdup_startup(buffer, wargv[i], maxlen);
 +	for (i = 0; i < argc; i++) {
-+		/* skip argv[0]: never rewrite the program name */
-+		const wchar_t *warg = i ? maybe_convert_posix_path_arg(wargv[i])
++		/* skip argv[0]: never rewrite the program name; and never
++		 * rewrite message payloads (wargv_value_is_message) - commit
++		 * messages are literal bytes, not path candidates */
++		const wchar_t *warg = (i && !wargv_value_is_message(i, wargv))
++					? maybe_convert_posix_path_arg(wargv[i])
 +					: wargv[i];
 +		argv[i] = save[i] = wcstoutfdup_startup(buffer, warg, maxlen);
 +	}

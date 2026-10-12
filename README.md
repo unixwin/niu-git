@@ -16,6 +16,23 @@ Phase 0 PoC **done**: MSVC + CMake + vcpkg build of git-for-windows v2.55.0.wind
 - Bundle: 20 MB / zip 20 MB (MinGit zip: 37 MB) — no MSYS2, no openssl, no perl
 - Patch #1: tolerate stale `http.sslBackend` from other Git distributions on
   single-backend (schannel) builds — warn + fall back instead of dying
+- Patch #2: accept POSIX-shaped path arguments (`/d/repo/...`) via
+  exists-checked fallback conversion; message payloads (`-m`/`--message`
+  values) are never rewritten — messages are literal bytes
+- Launcher (`scripts/entry/launch-git.c`): forwards argv byte-exactly using
+  standard Windows quoting rules (args with quotes or trailing backslashes
+  round-trip; `commit -m` payloads, `D:\dir\` style pathspecs, CJK and
+  multiline messages all survive verbatim)
+
+## Argv fidelity test
+
+`python scripts/test-launcher.py` runs a differential suite: the same command
+goes through the launcher and the real `mingw64/bin/git.exe` in twin repos,
+byte-comparing stdout/stderr/exit code plus HEAD message bytes, reflog and
+status. Message payloads are additionally asserted against their intended
+literal bytes (catches a bug shared by both stacks). Target selection:
+`NIUGIT_TEST_ROOT` (dir with `git.exe` + `mingw64/`), default `dist/` after a
+build, then the installed product as a smoke fallback.
 
 ## Test
 
