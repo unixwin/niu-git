@@ -37,6 +37,65 @@ Phase 0 PoC **done**: MSVC + CMake + vcpkg build of git-for-windows v2.55.0.wind
   rules (quotes/trailing backslashes round-trip, `commit -m` payloads,
   `D:\dir\` pathspecs, CJK and multiline messages survive verbatim)
 
+## Speed
+
+Startup cost of the `git` on your PATH, measured on Windows x64 with a warm
+cache (Python `subprocess` timing, 15 iterations, small repository, 2026-10):
+
+| `git` on PATH | `git --version` | `git status --porcelain` |
+|---|---|---|
+| **niu-git (flat layout)** | **13.7 ms avg / 11.5 ms min** | **22.6 ms avg / 17.4 ms min** |
+| Git for Windows `mingw64\bin\git.exe` | 51.3 ms avg | 30.6 ms avg |
+| Git for Windows `cmd\git.exe` (the usual PATH entry) | 45.3 ms avg | 50.1 ms avg |
+| `time git …` inside a MINGW64 Git Bash prompt | 73-103 ms real | — |
+
+The difference is structural, not tuning. Git Bash runs git inside the MSYS2
+runtime (and from cmd/PowerShell it is additionally reached through a
+`cmd\git.exe` launcher), so every invocation pays for a POSIX runtime
+initialisation — and, in a Git Bash prompt, a fork. In niu-git
+`usr\bin\git.exe` *is* the git binary — one `CreateProcess`, no MSYS DLLs, no
+bash and no perl in the process tree; patch #3 is what lets that bare binary
+find its own payload, so there is no wrapper hop either.
+
+Git Bash also bundles perl, which its `git send-email`, `git svn`,
+`git cvsimport`, `git cvsexportcommit` and `git archimport` need (and its
+test suite and hook samples use). niu-git has no perl dependency: those
+commands are absent instead of failing at runtime, and the shell-script
+parts of git that do matter — hooks, `git bisect`, `git mergetool`,
+`git filter-branch`, `git submodule`, `git request-pull` — run on the `sh`
+that [niubash](https://github.com/unixwin/niubash) provides.
+
+## Compared with Git Bash
+
+|  | Git Bash (Git for Windows) | niu-git |
+|---|---|---|
+| git binary | MSYS2 runtime + `cmd\git.exe` launcher | real git C source (MSVC), no POSIX layer |
+| `git --version` | 45-103 ms | **11-14 ms** |
+| POSIX tools / shell | bundled (bash, coreutils, openssl, perl) | none bundled — `sh` + coreutils come from [niubash](https://github.com/unixwin/niubash) and [winuxcmd](https://github.com/unixwin/winuxcmd) |
+| TLS | OpenSSL (bundled) or schannel | schannel only, no OpenSSL |
+| perl commands (`send-email`, `svn`, `cvs*`) | bundled with perl | not available |
+| `git grep -P` (PCRE2) | yes | no — use winuxcmd's `grep -P` instead |
+| git-gui / gitk (Tcl/Tk) | bundled | not shipped |
+| credential helper | Git Credential Manager in the system gitconfig | not configured by default (see below) |
+| ARM64 | yes | x64 only (so far) |
+
+Credentials after switching from Git Bash (Git Bash's
+`credential.helper=manager` lives in *its* system gitconfig, which niu-git
+cannot see):
+
+```
+git config --global credential.helper '!gh auth git-credential'  # GitHub CLI tokens
+git config --global credential.helper manager                    # Git Credential Manager, if installed
+git config --global credential.helper wincred                    # Windows Credential Manager (see below)
+```
+
+`wincred` is git's own tiny helper (172 KB, built from
+`src/contrib/credential/wincred` with one `cl` invocation — verified) and
+uses the `git:<protocol>://<host>` target names already present in the
+Windows Credential Manager, so credentials stored by Git Credential Manager
+stay usable. Shipping it in `libexec/git-core` and defaulting to it in
+`etc/gitconfig` is the planned fix for the migration gap.
+
 ## Argv fidelity test
 
 `python scripts/test-launcher.py` runs a differential suite: the same command
