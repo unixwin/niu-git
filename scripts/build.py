@@ -222,6 +222,82 @@ def build_entry():
     print("entry launcher ->", DIST / "git.exe")
 
 
+def dumpbin_path():
+    """Locate dumpbin (VS ships it; CI does not put it on PATH)."""
+    override = os.environ.get("DUMPBIN")
+    if override and Path(override).exists():
+        return Path(override)
+    roots = [
+        Path("C:/Program Files/Microsoft Visual Studio"),
+        Path("C:/Program Files (x86)/Microsoft Visual Studio"),
+    ]
+    patterns = [
+        "*/Community/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe",
+        "*/BuildTools/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe",
+        "*/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe",
+        "*/Professional/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe",
+    ]
+    for root in roots:
+        for pattern in patterns:
+            found = sorted(root.glob(pattern))
+            if found:
+                return found[-1]
+    raise SystemExit("dumpbin.exe not found; set the DUMPBIN environment variable")
+
+
+def imported_dlls(binary, dumpbin):
+    result = subprocess.run([str(dumpbin), "/dependents", str(binary)],
+                            capture_output=True, text=True)
+    names = []
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if name.lower().endswith(".dll") and " " not in name:
+            names.append(name)
+    return names
+
+
+def collect_runtime_dlls():
+    """Copy the non-system DLL closure of the installed binaries.
+
+    Only DLLs that vcpkg itself provides are considered, so no system-DLL
+    allow-list has to be maintained and a vcpkg port that starts (or stops)
+    depending on something is followed automatically.
+    """
+    dumpbin = dumpbin_path()
+    provided = {}
+    for root in (VCPKG_INSTALLED / "bin", VCPKG_STATIC_INSTALLED / "bin"):
+        if root.is_dir():
+            for dll in root.glob("*.dll"):
+                provided[dll.name.lower()] = dll
+
+    bin_dirs = [DIST / "mingw64" / "bin", DIST / "mingw64" / "libexec" / "git-core"]
+    target = DIST / "mingw64" / "libexec" / "git-core"
+    wanted = {}
+    pending = [p for d in bin_dirs for p in d.iterdir()
+               if p.suffix.lower() in (".exe", ".dll")]
+    visited = set()
+    while pending:
+        binary = pending.pop()
+        if binary.name.lower() in visited:
+            continue
+        visited.add(binary.name.lower())
+        for name in imported_dlls(binary, dumpbin):
+            key = name.lower()
+            source = provided.get(key)
+            if source is None or key in wanted:
+                continue
+            wanted[key] = source
+            pending.append(source)
+
+    for directory in bin_dirs + [target]:
+        for stale in directory.glob("*.dll"):
+            if stale.name.lower() not in wanted:
+                stale.unlink()
+    for source in sorted(wanted.values(), key=lambda p: p.name.lower()):
+        shutil.copy2(source, target / source.name)
+    print("runtime DLLs ->", ", ".join(sorted(wanted)) or "(none)")
+
+
 def link_dist_dashed():
     """git's setup_path() puts exec-path (libexec/git-core) on the PATH of
     spawned commands, and local clone/push invoke git-upload-pack and
@@ -259,19 +335,13 @@ def collect():
         p = DIST / "mingw64" / "bin" / f"{name}.exe"
         if p.exists():
             p.unlink()
-    # Runtime DLLs. The vcpkg libcurl here is the schannel build: TLS goes
-    # through Windows crypt32/bcrypt, no openssl shipped. zlib/iconv are
-    # linked statically into the git binaries, but libcurl.dll still imports
-    # zlib1.dll, so ship the remaining DLLs next to it (libexec/git-core).
-    for stale in ("iconv-2.dll", "zlib1.dll", "libcurl.dll"):
-        # drop copies from earlier dynamic builds (also in bin/)
-        for sub in ("bin", "libexec/git-core"):
-            p = DIST / "mingw64" / sub / stale
-            if p.exists():
-                p.unlink()
-    for dll in ("zlib1.dll", "libcurl.dll"):
-        src = VCPKG_INSTALLED / "bin" / dll
-        shutil.copy2(src, DIST / "mingw64" / "libexec" / "git-core" / dll)
+    # Runtime DLLs: ship exactly the closure of what the installed binaries
+    # import and vcpkg provides (everything else is a system DLL). The previous
+    # hardcoded list (zlib1.dll, libcurl.dll) coupled the artifact to one
+    # vcpkg curl port revision - a revision that grows a dependency (brotli,
+    # zstd, ...) would ship a broken curl, and a developer machine hides it by
+    # resolving the missing DLL from its own vcpkg bin directory.
+    collect_runtime_dlls()
     # The bundled curl supports schannel only; make it the default so plain
     # `git clone https://...` works out of the box.
     etc = DIST / "etc"

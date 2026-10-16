@@ -90,18 +90,27 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
           $vcpkg = Join-Path $env:VCPKG_ROOT "vcpkg.exe"
           if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) { throw "vcpkg.exe not found at $vcpkg" }
+          # The iconv port was renamed to libiconv upstream; classic-mode vcpkg
+          # follows whatever the runner's registry has, so try both names.
+          function Install-Iconv([string]$triplet) {
+            foreach ($port in @("libiconv", "iconv")) {
+              & $vcpkg install "${port}:$triplet" --clean-after-build
+              if ($LASTEXITCODE -eq 0) { Write-Host "iconv port: $port ($triplet)"; return }
+            }
+            throw "no iconv port (libiconv/iconv) installs for $triplet"
+          }
           # Dynamic triplet: curl (schannel TLS) and expat stay DLLs next to the
           # remote helpers, exactly like the developer layout.
           & $vcpkg install "zlib:${{ matrix.arch }}-windows" `
                            "curl[schannel]:${{ matrix.arch }}-windows" `
-                           "expat:${{ matrix.arch }}-windows" `
-                           "iconv:${{ matrix.arch }}-windows" --clean-after-build
+                           "expat:${{ matrix.arch }}-windows" --clean-after-build
           if ($LASTEXITCODE -ne 0) { throw "vcpkg (dynamic) failed" }
+          Install-Iconv "${{ matrix.arch }}-windows"
           # Static triplet: zlib and iconv are linked into git.exe so the bare
           # usr/bin/git.exe needs no DLL search path (patch 0003 + flat layout).
-          & $vcpkg install "zlib:${{ matrix.arch }}-windows-static-md" `
-                           "iconv:${{ matrix.arch }}-windows-static-md" --clean-after-build
+          & $vcpkg install "zlib:${{ matrix.arch }}-windows-static-md" --clean-after-build
           if ($LASTEXITCODE -ne 0) { throw "vcpkg (static) failed" }
+          Install-Iconv "${{ matrix.arch }}-windows-static-md"
 
       - name: Build niu-git (${{ matrix.arch }})
         shell: cmd
