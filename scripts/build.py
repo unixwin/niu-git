@@ -248,6 +248,17 @@ def collect():
         launcher.unlink()
         print("removed stale root launcher", launcher)
     link_dist_dashed()
+    # Drop the dashed forms from bin/ once libexec has them: in the wpm flat
+    # layout mingw64/bin is not on PATH (only usr/bin/git.exe is), and git
+    # always resolves them via setup_path's exec-path prepend anyway - the
+    # old launcher's private PATH prepend was the only thing that ever read
+    # them from bin/. They are hardlinks of the 5 MB git.exe, and a zip
+    # explodes hardlinks, so shipping both copies inflates the artifact by
+    # ~15 MB for no reachable code path.
+    for name in SERVER_DASHED:
+        p = DIST / "mingw64" / "bin" / f"{name}.exe"
+        if p.exists():
+            p.unlink()
     # Runtime DLLs. The vcpkg libcurl here is the schannel build: TLS goes
     # through Windows crypt32/bcrypt, no openssl shipped. zlib/iconv are
     # linked statically into the git binaries, but libcurl.dll still imports
