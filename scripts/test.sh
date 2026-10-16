@@ -61,12 +61,22 @@ cd "$ROOT/src/t" || exit 1
 # files. Deterministic — no reliance on ls-pipe behavior. NOTE: patterns
 # must NOT carry a trailing ".*"; the ".sh" suffix is appended here, and
 # "name.*.sh" would never match "name.sh" (double-dot requirement).
+# GLOB entries may be bare test names (test-globs.txt) or wildcards
+# (README: `test.sh "t0*"`): hold noglob while splitting $GLOB so a
+# wildcard isn't resolved against the cwd here (that would append .sh to
+# an already-suffixed filename and select nothing), then re-enable
+# pathname expansion for the $g.sh probe, which turns a bare name into
+# itself and a wildcard into every matching test file.
 TESTS=""
+set -f
 for g in $GLOB; do
+    set +f
     for f in $g.sh; do
         [ -f "$f" ] && TESTS="$TESTS $f"
     done
+    set -f
 done
+set +f
 printf '%s\n' $TESTS | xargs -P "$JOBS" -I{} sh -c 'exec sh "$1" > "$TESTLOG/$1.log" 2>&1' _ {}
 
 echo "== aggregate =="

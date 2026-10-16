@@ -1,7 +1,7 @@
 {
   "name": "niugit",
-  "version": "2.55.0.2",
-  "description": "Native Windows git without MSYS (niu-git build); schannel-only TLS, no bundled shell/perl, hooks run via sh found on PATH.",
+  "version": "2.55.0.5",
+  "description": "Native Windows git without MSYS (niu-git build); schannel-only TLS, no bundled shell/perl, hooks run via sh found on PATH; accepts POSIX-shaped path args (/d/...) via fallback conversion; static zlib/iconv, bare usr/bin/git.exe self-locates (flat layout, no shim).",
   "kind": "external",
   "category": "developer",
   "license": "GPL-2.0-only",
@@ -12,26 +12,26 @@
   "artifacts": {
     "windows-x64": {
       "type": "zip",
-      "sha256": "fc293ad2daed66da39286cb58fcae11bb09944b13b1ef1c19151eb9f11bde356",
+      "sha256": "dd85269514b07d873f3bde835483fc0b69d23e0d87d36c93e67b5b88aa379932",
       "urls": [
-        "https://github.com/unixwin/niu-git/releases/download/v2.55.0.2/niu-git-2.55.0.windows.2-x64.zip"
+        "https://github.com/unixwin/niu-git/releases/download/v2.55.0.5/niu-git-2.55.0.windows.2-x64.zip"
       ],
       "files": [
         {
           "from": "mingw64/",
-          "to": "mingw64/"
+          "to": "opt/niugit/mingw64/"
         },
         {
           "from": "etc/",
-          "to": "etc/"
+          "to": "opt/niugit/etc/"
         },
         {
-          "from": "git.exe",
+          "from": "mingw64/bin/git.exe",
           "to": "git.exe"
         }
       ],
-      "size": 21321170,
-      "layout": "shim"
+      "size": 33147311,
+      "layout": "flat"
     }
   }
 }

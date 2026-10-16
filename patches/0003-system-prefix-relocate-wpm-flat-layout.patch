@@ -1,0 +1,121 @@
+From: niu-git
+Subject: [PATCH] system_prefix: self-locate the wpm relocatable payload
+
+Justification (see patches/README.md): in the wpm "flat" package layout
+git.exe is installed to the shared <root>/usr/bin while the payload lives
+at <root>/opt/niugit/mingw64. The suffix strips then compute <root>/usr
+as the runtime prefix, a directory without libexec/git-core, so the exec
+path, the template dir and ../etc/gitconfig all silently miss and git
+falls back to system-wide defaults (or fails outright).
+
+Validate the stripped prefix against <prefix>/<GIT_EXEC_PATH> and, when
+that does not hold, walk up from the executable directory looking for a
+payload marker (opt/niugit/mingw64, mingw64) before falling back to the
+original chain. Normal MinGit and build-tree layouts keep their existing
+prefix byte for byte: there the strip validates on the first try and the
+probe never runs.
+
+
+
+--- a/exec-cmd.c
++++ b/exec-cmd.c
+@@ -43,17 +43,95 @@ static const char *system_prefix(void);
+  */
+ static const char *executable_dirname;
+ 
++/*
++ * niubash/wpm relocatable-binary probe: git.exe may be installed into a
++ * shared bin directory (e.g. <root>/usr/bin) while the payload lives at
++ * <root>/opt/niugit/mingw64. There the suffix strips in
++ * system_prefix() compute <root>/usr as the prefix, a directory without
++ * libexec/git-core, which silently breaks the exec path, the template
++ * dir and ../etc/gitconfig. Walk up from the executable dir looking for
++ * a payload marker instead and return the prefix it identifies, or NULL
++ * when no marker is found.
++ */
++static const char *probe_relocatable_prefix(void)
++{
++	struct strbuf dir = STRBUF_INIT;
++	struct strbuf candidate = STRBUF_INIT;
++	const char *found = NULL;
++	int up;
++
++	strbuf_addstr(&dir, executable_dirname);
++	for (up = 0; up < 4; up++) {
++		static const char *const payloads[] = {
++			"opt/niugit/mingw64", "mingw64"
++		};
++		const char *slash;
++		size_t i;
++
++		for (i = 0; i < ARRAY_SIZE(payloads); i++) {
++			strbuf_reset(&candidate);
++			strbuf_addf(&candidate, "%s/%s/%s", dir.buf,
++				    payloads[i], GIT_EXEC_PATH);
++			if (is_directory(candidate.buf)) {
++				strbuf_reset(&candidate);
++				strbuf_addf(&candidate, "%s/%s", dir.buf,
++					    payloads[i]);
++				found = strbuf_detach(&candidate, NULL);
++				goto done;
++			}
++		}
++
++		slash = find_last_dir_sep(dir.buf);
++		if (!slash)
++			break;
++		strbuf_setlen(&dir, slash - dir.buf);
++		if (!dir.len)
++			break;
++	}
++done:
++	strbuf_release(&dir);
++	strbuf_release(&candidate);
++	return found;
++}
++
+ static const char *system_prefix(void)
+ {
+ 	static const char *prefix;
++	struct strbuf check = STRBUF_INIT;
++	const char *stripped;
+ 
+ 	assert(executable_dirname);
+ 	assert(is_absolute_path(executable_dirname));
+ 
+-	if (!prefix &&
+-	    !(prefix = strip_path_suffix(executable_dirname, GIT_EXEC_PATH)) &&
+-	    !(prefix = strip_path_suffix(executable_dirname, BINDIR)) &&
+-	    !(prefix = strip_path_suffix(executable_dirname, "git"))) {
++	if (prefix)
++		return prefix;
++
++	stripped = strip_path_suffix(executable_dirname, GIT_EXEC_PATH);
++	if (!stripped)
++		stripped = strip_path_suffix(executable_dirname, BINDIR);
++	if (!stripped)
++		stripped = strip_path_suffix(executable_dirname, "git");
++
++	/*
++	 * The strips only prove that the executable lives in a directory
++	 * named like the relative runtime paths, not that the prefix is
++	 * the real one: <root>/usr/bin strips "bin" to <root>/usr, which
++	 * has no libexec/git-core. Validate before trusting it, and fall
++	 * back to the relocatable probe when it does not hold.
++	 */
++	if (stripped) {
++		strbuf_addf(&check, "%s/%s", stripped, GIT_EXEC_PATH);
++		if (is_directory(check.buf))
++			prefix = stripped;
++		strbuf_reset(&check);
++	}
++
++	if (!prefix)
++		prefix = probe_relocatable_prefix();
++
++	if (!prefix && stripped) {
++		prefix = stripped;
++	} else if (!prefix) {
+ 		prefix = FALLBACK_RUNTIME_PREFIX;
+ 		trace_printf("RUNTIME_PREFIX requested, "
+ 				"but prefix computation failed.  "
