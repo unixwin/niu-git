@@ -24,7 +24,7 @@ DIST = ROOT / "dist"
 
 # PoC links against the classic-mode vcpkg install (zlib/curl already built).
 # Later: manifest mode with curl[schannel] + static triplets.
-VCPKG_ROOT = Path("D:/vcpkg")
+VCPKG_ROOT = Path(os.environ.get("NIUGIT_VCPKG_ROOT", "D:/vcpkg"))
 VCPKG_INSTALLED = VCPKG_ROOT / "installed" / "x64-windows"
 # Static triplet searched first: ZLIB (zs.lib) and Iconv (iconv.lib) resolve
 # here, while curl/EXPAT exist only in x64-windows and stay dynamic. Both

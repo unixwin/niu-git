@@ -1,0 +1,350 @@
+name: niu-git Windows build
+
+# Builds the whole product on GitHub runners instead of a developer box:
+# the upstream git-for-windows tarball is fetched by scripts/build.py, the
+# vcpkg dependencies are binary-cached, x64 and arm64 are built side by side,
+# the upstream t test suite runs under the runner's real Git Bash, and a tag
+# publishes both zips plus the wpm-source index entry.
+on:
+  push:
+    branches: [ "master", "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # vcpkg ships on the runner image; NIUGIT_VCPKG_ROOT is what build.py reads
+  # (it defaults to D:/vcpkg on developer machines).
+  VCPKG_ROOT: C:\vcpkg
+  # Reuse built ports across runs: without this every job rebuilds curl from
+  # source (5-10 minutes per triplet).
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}\\.vcpkg-bincache,readwrite"
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-bincache
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    outputs:
+      version: ${{ steps.upstream.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            vcvars_arg: x64
+          - arch: arm64
+            vcvars_arg: x64_arm64
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Read the pinned upstream git tag
+        id: upstream
+        shell: pwsh
+        run: |
+          $match = Select-String -Path scripts/build.py -Pattern 'GIT_TAG = "([^"]+)"'
+          if (-not $match) { throw "GIT_TAG not found in scripts/build.py" }
+          $tag = $match.Matches.Groups[1].Value
+          # Release assets keep the historical name shape:
+          # niu-git-<upstream version>-<arch>.zip (see README, WPM package).
+          $version = $tag -replace '^v', ''
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "upstream git: $tag (asset version $version)"
+
+      - name: Locate Visual Studio toolchain
+        id: locate_vcvars
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+            throw "vswhere.exe not found at $vswhere"
+          }
+          $vcvarsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find "VC\Auxiliary\Build\vcvarsall.bat" | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($vcvarsPath)) {
+            throw "vcvarsall.bat not found; the runner image is missing the VC toolchain"
+          }
+          "vcvars_path=$vcvarsPath" >> $env:GITHUB_OUTPUT
+          Write-Host "vcvars: $vcvarsPath"
+
+      - name: Cache vcpkg ports
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\.vcpkg-bincache
+          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('scripts/build.py') }}
+          restore-keys: vcpkg-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          $vcpkg = Join-Path $env:VCPKG_ROOT "vcpkg.exe"
+          if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) { throw "vcpkg.exe not found at $vcpkg" }
+          # Dynamic triplet: curl (schannel TLS) and expat stay DLLs next to the
+          # remote helpers, exactly like the developer layout.
+          & $vcpkg install "zlib:${{ matrix.arch }}-windows" `
+                           "curl[schannel]:${{ matrix.arch }}-windows" `
+                           "expat:${{ matrix.arch }}-windows" `
+                           "iconv:${{ matrix.arch }}-windows" --clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg (dynamic) failed" }
+          # Static triplet: zlib and iconv are linked into git.exe so the bare
+          # usr/bin/git.exe needs no DLL search path (patch 0003 + flat layout).
+          & $vcpkg install "zlib:${{ matrix.arch }}-windows-static-md" `
+                           "iconv:${{ matrix.arch }}-windows-static-md" --clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg (static) failed" }
+
+      - name: Build niu-git (${{ matrix.arch }})
+        shell: cmd
+        env:
+          NIUGIT_VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
+        run: |
+          call "${{ steps.locate_vcvars.outputs.vcvars_path }}" ${{ matrix.vcvars_arg }}
+          python scripts/build.py --arch ${{ matrix.arch }}
+
+      - name: Verify the product layout (${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          $dist = if ("${{ matrix.arch }}" -eq "x64") { "dist" } else { "dist-${{ matrix.arch }}" }
+          $gitExe = Join-Path $dist "mingw64\bin\git.exe"
+          if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw "missing $gitExe" }
+          foreach ($p in @("mingw64\libexec\git-core\git-upload-pack.exe",
+                           "mingw64\libexec\git-core\git-receive-pack.exe",
+                           "mingw64\libexec\git-core\git-upload-archive.exe",
+                           "etc\gitconfig")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dist $p))) { throw "missing $dist\$p" }
+          }
+          if ((Get-Item (Join-Path $dist "mingw64\bin")).GetFiles().Name -contains "git-upload-pack.exe") {
+            throw "bin/ still carries the dashed server forms (deliberately trimmed)"
+          }
+          # Static zlib/iconv: the import table must not name them.
+          $dumpbin = & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
+            -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe not found" }
+          $imports = & $dumpbin /dependents $gitExe 2>&1 | Out-String
+          foreach ($dll in @("zlib1.dll", "iconv-2.dll")) {
+            if ($imports -match [regex]::Escape($dll)) { throw "git.exe still imports $dll" }
+          }
+          Write-Host "layout + static-link checks passed for ${{ matrix.arch }}"
+
+      - name: Run the upstream test subset (x64)
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          # scripts/test.sh requires a real Git Bash (the runner has Git for
+          # Windows plus its MSYS perl, which chainlint and the perl test
+          # helpers need) and picks GIT_BUILD_DIR/TEST_DIRECTORY itself.
+          $bash = Join-Path ${env:ProgramFiles} "Git\bin\bash.exe"
+          if (-not (Test-Path -LiteralPath $bash -PathType Leaf)) { throw "Git Bash not found at $bash" }
+          $env:JOBS = "4"
+          & $bash scripts/test.sh
+          if ($LASTEXITCODE -ne 0) { throw "test suite failed" }
+
+      - name: Package (${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          $dist = if ("${{ matrix.arch }}" -eq "x64") { "dist" } else { "dist-${{ matrix.arch }}" }
+          $zip = "niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}.zip"
+          Remove-Item -LiteralPath (Join-Path $dist $zip) -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path (Join-Path $dist "mingw64"), (Join-Path $dist "etc") `
+                           -DestinationPath (Join-Path $dist $zip) -Force
+          $item = Get-Item (Join-Path $dist $zip)
+          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash.ToLowerInvariant()
+          Write-Host ("{0}: {1} bytes, sha256 {2}" -f $zip, $item.Length, $sha)
+
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}
+          path: |
+            dist/niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}.zip
+            dist-${{ matrix.arch }}/niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  # The arm64 binary cannot run on the x64 runners, so a native ARM64 runner
+  # proves it actually starts. windows-11-arm is a preview image: keep it
+  # non-blocking until it is reliably available.
+  arm64-smoke:
+    runs-on: windows-11-arm
+    needs: build
+    continue-on-error: true
+    steps:
+      - name: Download the arm64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: niu-git-${{ needs.build.outputs.version }}-arm64
+          path: arm64
+      - name: Unpack and run
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem arm64 -Filter "*.zip" | Select-Object -First 1
+          if (-not $zip) { throw "no arm64 zip downloaded" }
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath arm64-root -Force
+          $git = "arm64-root\mingw64\bin\git.exe"
+          & $git --version
+          if ($LASTEXITCODE -ne 0) { throw "arm64 git.exe failed to start" }
+          & $git config --system --list
+          Write-Host "arm64 smoke passed"
+
+  release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download both artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Flatten the zips
+        shell: bash
+        run: |
+          mkdir -p out
+          find artifacts -name "*.zip" -exec cp {} out/ \;
+          ls -la out/
+
+      - name: Attach the assets to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+          body: |
+            Real git for Windows, without MSYS: `usr\bin\git.exe` **is** the git
+            binary — no launcher, no winuxcmd dispatch hop, no MSYS runtime, no
+            perl in the process tree. `git --version` starts in ~14 ms where Git
+            Bash's `git` needs 45-103 ms; see the README's *Speed* and
+            *Compared with Git Bash* sections for the measured tables.
+
+            Assets: `niu-git-${{ needs.build.outputs.version }}-x64.zip` and
+            `niu-git-${{ needs.build.outputs.version }}-arm64.zip`.
+
+            Upgrading an existing install (needs WinuxCmd/wpm 1.1.10+):
+
+            ```
+            wpm update winuxcmd
+            wpm install niugit --force
+            ```
+
+  index:
+    # Keeps the wpm-source niugit entry (sha256 + size) in step with the
+    # published assets. Needs a PAT with write access to unixwin/wpm-source;
+    # without the secret the job reports and exits.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Check the wpm-source token
+        env:
+          WPM_SOURCE_TOKEN: ${{ secrets.WPM_SOURCE_TOKEN }}
+        run: |
+          if [ -z "${WPM_SOURCE_TOKEN}" ]; then
+            echo "::warning::WPM_SOURCE_TOKEN is not configured; skipping the wpm-source index update"
+            echo "skip=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download both artifacts
+        if: env.skip != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Checkout wpm-source
+        if: env.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: unixwin/wpm-source
+          token: ${{ secrets.WPM_SOURCE_TOKEN }}
+          path: wpm-source
+
+      - name: Checkout niu-git (for the mapping template)
+        if: env.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          path: niugit
+
+      - name: Patch the niugit entry
+        if: env.skip != 'true'
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, glob, os, collections
+          version = os.environ["VERSION"]
+          index_path = "wpm-source/index.json"
+          with open(index_path, encoding="utf-8") as fh:
+              index = json.load(fh, object_pairs_hook=collections.OrderedDict)
+          # The repo's own copy is the source of truth for commands/mapping.
+          with open("niugit/wpm/niugit.json", encoding="utf-8") as fh:
+              template = json.load(fh)
+          artifacts = {}
+          for arch in ("x64", "arm64"):
+              hits = glob.glob(f"artifacts/**/niu-git-{version}-{arch}.zip", recursive=True)
+              if not hits:
+                  continue
+              data = open(hits[0], "rb").read()
+              artifacts["windows-" + arch] = {
+                  "type": "zip",
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "size": len(data),
+                  "urls": [f"https://github.com/unixwin/niu-git/releases/download/{os.environ['GITHUB_REF_NAME']}/niu-git-{version}-{arch}.zip"],
+                  "files": template["artifacts"]["windows-x64"]["files"],
+                  "layout": "flat",
+              }
+          for pkg in index["packages"]:
+              if pkg.get("name") != "niugit":
+                  continue
+              pkg["version"] = version
+              pkg["description"] = template["description"]
+              pkg["artifacts"] = collections.OrderedDict(
+                  (k, artifacts[k]) for k in sorted(artifacts))
+              break
+          else:
+              raise SystemExit("niugit entry not found in the wpm-source index")
+          with open(index_path, "w", encoding="utf-8", newline="\n") as fh:
+              json.dump(index, fh, indent=2, ensure_ascii=False)
+              fh.write("\n")
+          print("patched niugit ->", version, sorted(artifacts))
+          PY
+
+      - name: Open and merge the index PR
+        if: env.skip != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WPM_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd wpm-source
+          if git diff --quiet -- index.json; then
+            echo "wpm-source already matches niu-git ${VERSION}"
+            exit 0
+          fi
+          branch="automation/niugit-${VERSION}-index"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add index.json
+          git commit -m "niugit: ${VERSION}"
+          git push --force-with-lease origin "$branch"
+          pr_url="$(gh pr list --repo unixwin/wpm-source --head "$branch" --state open --json url --jq '.[0].url')"
+          if [ -z "$pr_url" ]; then
+            pr_url="$(gh pr create --repo unixwin/wpm-source --base main --head "$branch" \
+              --title "niugit: ${VERSION}" \
+              --body "Automated index update from the niu-git ${VERSION} release (sha256 + size from the published assets).")"
+          fi
+          gh pr merge "$pr_url" --repo unixwin/wpm-source --squash --delete-branch || \
+            gh pr merge "$pr_url" --repo unixwin/wpm-source --squash --delete-branch --auto
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
