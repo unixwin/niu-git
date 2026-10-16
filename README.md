@@ -79,22 +79,30 @@ that [niubash](https://github.com/unixwin/niubash) provides.
 | credential helper | Git Credential Manager in the system gitconfig | not configured by default (see below) |
 | ARM64 | yes | x64 only (so far) |
 
-Credentials after switching from Git Bash (Git Bash's
-`credential.helper=manager` lives in *its* system gitconfig, which niu-git
-cannot see):
+`git --version` carries both the upstream suffix and our marker
+(`2.56.0.windows.2.niugit`), so a bug report identifies the distribution as
+well as the base — a bare `2.55.0` was what upstream's fallback produced
+because the tarball ships no `version` file.
+
+Credentials: a helper you configured yourself works unchanged — niu-git
+reads the same user config, so a host-scoped `credential.<url>.helper`, Git
+Credential Manager, or `gh auth git-credential` keeps answering exactly as
+it did. Only a helper that lived in Git Bash's *system* gitconfig
+(`credential.helper=manager` there) is invisible to niu-git; for that case
+the bundle ships git's own tiny `wincred` helper (172 KB, built from
+`contrib/credential/wincred`), which reads the
+`git:<protocol>://<host>` entries already in the Windows Credential Manager
+(the names Git Credential Manager writes):
 
 ```
-git config --global credential.helper '!gh auth git-credential'  # GitHub CLI tokens
-git config --global credential.helper manager                    # Git Credential Manager, if installed
-git config --global credential.helper wincred                    # Windows Credential Manager (see below)
+git config --global credential.helper wincred                    # the bundled helper
+git config --global credential.helper manager                    # or Git Credential Manager, if installed
+git config --global credential.helper '!gh auth git-credential' # or GitHub CLI tokens
 ```
 
-`wincred` is git's own tiny helper (172 KB, built from
-`src/contrib/credential/wincred` with one `cl` invocation — verified) and
-uses the `git:<protocol>://<host>` target names already present in the
-Windows Credential Manager, so credentials stored by Git Credential Manager
-stay usable. Shipping it in `libexec/git-core` and defaulting to it in
-`etc/gitconfig` is the planned fix for the migration gap.
+niu-git deliberately sets no credential helper in its system gitconfig: git
+consults helpers in system -> global -> local order, so a system default
+would run *before* a helper you chose yourself.
 
 ## Argv fidelity test
 

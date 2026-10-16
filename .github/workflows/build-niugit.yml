@@ -169,13 +169,18 @@ jobs:
           # The product promise is schannel TLS through libcurl with no
           # OpenSSL anywhere; only the x64 runner can execute the binary.
           $git = "dist\mingw64\bin\git.exe"
+          $version = & $git --version
+          Write-Host $version
+          if ($version -notmatch 'niugit') {
+            throw "git --version does not identify the distribution (version stamp not applied)"
+          }
           & $git config --system --list | Out-String | Write-Host
           & $git ls-remote https://github.com/unixwin/niu-git HEAD
           if ($LASTEXITCODE -ne 0) { throw "git ls-remote over https failed (TLS backend broken?)" }
           $openssl = Get-ChildItem dist -Recurse -Include *.dll |
             Where-Object { $_.Name -match '^(lib)?(ssl|crypto|eay)' }
           if ($openssl) { throw "OpenSSL-style DLL shipped: $($openssl.Name -join ', ')" }
-          Write-Host "https round trip OK, no OpenSSL DLLs shipped"
+          Write-Host "https round trip OK, version stamped, no OpenSSL DLLs shipped"
 
       - name: Package (${{ matrix.arch }})
         shell: pwsh

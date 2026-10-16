@@ -233,13 +233,20 @@ def find_vcvars():
 def build_wincred():
     """Ship git's own Windows Credential Manager helper.
 
-    Credentials were the one migration gap with no answer: Git Bash gets
-    credential.helper=manager from its own system gitconfig, which niu-git
-    cannot see, so a migrating user fell back to typing credentials at the
-    terminal. wincred is git's own helper - one C file, no perl, no MSYS - and
-    it reads the git:<protocol>://<host> entries already in the Windows
-    Credential Manager (the same names Git Credential Manager writes), so
-    stored credentials keep working. etc/gitconfig makes it the default.
+    Git for Windows answers credentials from its *system* gitconfig
+    (credential.helper=manager, and that file is invisible to us), so a user
+    whose only helper lived there is prompted at the terminal after migrating.
+    wincred is git's own helper - one C file, no perl, no MSYS - and it reads
+    the git:<protocol>://<host> entries already in the Windows Credential
+    Manager (the same target names Git Credential Manager writes), so it is a
+    zero-download replacement for that case.
+
+    It is shipped but not made the system default on purpose: git consults
+    helpers system -> global -> local, so a system-level default would answer
+    before a helper the user configured (host-scoped credential.<url>.helper,
+    GCM, `gh auth git-credential`, ...). Users with a helper keep exactly the
+    behavior they had; the documented recipe and the niu setup wizard cover
+    the rest.
     """
     source = SRC / "contrib" / "credential" / "wincred" / "git-credential-wincred.c"
     if not source.is_file():
@@ -273,6 +280,22 @@ def build_wincred():
     if not target.is_file():
         raise SystemExit("git-credential-wincred.exe was not produced")
     print("credential helper ->", target.relative_to(ROOT))
+
+
+def stamp_version():
+    """Give the build a version string that names this distribution.
+
+    GIT-VERSION-GEN prefers a `version` file in the source root (what Git for
+    Windows ships in its release tarballs); ours has none, so the build fell
+    back to upstream's hardcoded DEF_VER and `git --version` printed a bare
+    "2.55.0" - no .windows.N suffix and nothing identifying niu-git in a bug
+    report. Writing the file before configure() sets the version compiled into
+    git, `git version --build-options`, GIT_USER_AGENT and the docs links.
+    """
+    upstream = GIT_TAG[1:] if GIT_TAG.startswith("v") else GIT_TAG
+    version = os.environ.get("NIUGIT_BUILD_VERSION", f"{upstream}.niugit")
+    (SRC / "version").write_text(version + "\n", encoding="ascii", newline="\n")
+    print(f"version stamp -> {version}")
 
 
 def configure():
@@ -514,18 +537,21 @@ def collect():
     # resolving the missing DLL from its own vcpkg bin directory.
     collect_runtime_dlls()
     # The bundled curl supports schannel only; make it the default so plain
-    # `git clone https://...` works out of the box. The credential helper is
-    # git's own Windows Credential Manager one (built from contrib/credential/
-    # wincred): Git Bash gets its helper from a system gitconfig niu-git cannot
-    # see, so without this a migrating user is prompted at the terminal for
-    # every private remote. Entries are shared with Git Credential Manager
-    # (same git:<protocol>://<host> target names), and a user-level helper
-    # still runs after this one when wincred has nothing stored.
+    # `git clone https://...` works out of the box.
+    #
+    # Deliberately no credential.helper here. git consults helpers in
+    # system -> global -> local order, so a system-level default would run
+    # *before* a helper the user configured themselves (a host-scoped
+    # credential.<url>.helper, Git Credential Manager, `gh auth
+    # git-credential`, ...); if it happened to hold a stale entry for that
+    # host it would answer first. The helper binary ships anyway
+    # (build_wincred below), so `git config --global credential.helper
+    # wincred` is a zero-download option and the niu setup wizard can offer it
+    # once instead of us changing someone's credential behavior silently.
     etc = DIST / "etc"
     etc.mkdir(parents=True, exist_ok=True)
     (etc / "gitconfig").write_text(
-        "[http]\n\tsslBackend = schannel\n[credential]\n\thelper = wincred\n",
-        encoding="utf-8", newline="\n")
+        "[http]\n\tsslBackend = schannel\n", encoding="utf-8", newline="\n")
 
 
 def main():
@@ -545,6 +571,7 @@ def main():
     if args.prepare or not SRC.exists():
         prepare()
     apply_patches()
+    stamp_version()
     if not args.skip_configure:
         configure()
     build()
