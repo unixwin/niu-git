@@ -1,7 +1,11 @@
 #!/bin/sh
-# Shim: run Strawberry (native Windows) perl from MSYS sh, converting
-# MSYS-style path arguments to Windows paths. Used only by the git test
-# suite on niu-git build machines that lack an MSYS perl (/usr/bin/perl).
+# Shim: give the git test suite a perl, whichever flavor this machine has.
+#
+#   1. Strawberry (native Windows) perl: run it from MSYS sh, converting
+#      MSYS-style path arguments to Windows paths.
+#   2. Otherwise an MSYS perl (/usr/bin/perl, present when the suite runs
+#      under a real Git Bash whose MSYS root carries perl): exec it
+#      VERBATIM — no conversion, exactly like upstream's PERL_PATH.
 #
 # NOTE: arguments must be passed to perl VERBATIM — perl one-liners from
 # the test suite routinely contain backslashes (e.g. hex2oct's
@@ -11,7 +15,16 @@
 # and corrupted the perl code. Round-trip through positional parameters
 # instead; never build a command string.
 
-PERL_REAL=/c/Strawberry/perl/bin/perl.exe
+if [ -x /c/Strawberry/perl/bin/perl.exe ]; then
+    PERL_REAL=/c/Strawberry/perl/bin/perl.exe
+elif [ -x /usr/bin/perl ]; then
+    # MSYS perl: POSIX paths are understood natively, wrappers consume
+    # GITPERLLIB themselves, so pass everything through untouched.
+    exec /usr/bin/perl "$@"
+else
+    echo "t-perl-shim: no perl found (Strawberry or /usr/bin/perl)" >&2
+    exit 127
+fi
 
 n=$#
 i=0
