@@ -130,18 +130,11 @@ jobs:
         shell: pwsh
         run: |
           $dist = if ("${{ matrix.arch }}" -eq "x64") { "dist" } else { "dist-${{ matrix.arch }}" }
-          $gitExe = Join-Path $dist "mingw64\bin\git.exe"
-          if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw "missing $gitExe" }
-          foreach ($p in @("mingw64\libexec\git-core\git-upload-pack.exe",
-                           "mingw64\libexec\git-core\git-receive-pack.exe",
-                           "mingw64\libexec\git-core\git-upload-archive.exe",
-                           "etc\gitconfig")) {
-            if (-not (Test-Path -LiteralPath (Join-Path $dist $p))) { throw "missing $dist\$p" }
-          }
-          if ((Get-Item (Join-Path $dist "mingw64\bin")).GetFiles().Name -contains "git-upload-pack.exe") {
-            throw "bin/ still carries the dashed server forms (deliberately trimmed)"
-          }
+          # Layout, trimmed bin/, credential helper and build-path leakage.
+          python scripts/check-dist.py $dist
+          if ($LASTEXITCODE -ne 0) { throw "check-dist failed for $dist" }
           # Static zlib/iconv: the import table must not name them.
+          $gitExe = Join-Path $dist "mingw64\bin\git.exe"
           $dumpbin = & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
             -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
           if (-not $dumpbin) { throw "dumpbin.exe not found" }
@@ -149,7 +142,7 @@ jobs:
           foreach ($dll in @("zlib1.dll", "iconv-2.dll")) {
             if ($imports -match [regex]::Escape($dll)) { throw "git.exe still imports $dll" }
           }
-          Write-Host "layout + static-link checks passed for ${{ matrix.arch }}"
+          Write-Host "layout + static-link + path checks passed for ${{ matrix.arch }}"
 
       - name: Run the upstream test subset (x64)
         if: matrix.arch == 'x64'

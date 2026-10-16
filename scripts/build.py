@@ -43,11 +43,13 @@ VCPKG_INSTALLED = VCPKG_ROOT / "installed" / "x64-windows"
 # bare git.exe in the shared <root>/usr/bin with no DLL search-path setup.
 VCPKG_STATIC_INSTALLED = VCPKG_ROOT / "installed" / "x64-windows-static-md"
 ARCH_FLAG = []
+ARCH_NAME = "x64"
 
 
 def use_arch(arch):
     """Retarget build/dist/vcpkg triplet directories for x64 or arm64."""
-    global BUILD, DIST, VCPKG_INSTALLED, VCPKG_STATIC_INSTALLED, ARCH_FLAG
+    global BUILD, DIST, VCPKG_INSTALLED, VCPKG_STATIC_INSTALLED, ARCH_FLAG, ARCH_NAME
+    ARCH_NAME = arch
     if arch == "x64":
         return
     BUILD = ROOT / f"build-{arch}"
@@ -201,12 +203,97 @@ def apply_patches():
         raise SystemExit(f"patch failed: {p.name}")
 
 
+def find_vcvars():
+    """Locate vcvarsall.bat (VS ships it; needed to compile the credential
+    helper outside the CMake build)."""
+    override = os.environ.get("VCVARS")
+    if override and Path(override).exists():
+        return Path(override)
+    vswhere = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / \
+        "Microsoft Visual Studio/Installer/vswhere.exe"
+    if vswhere.is_file():
+        result = subprocess.run(
+            [str(vswhere), "-latest", "-products", "*",
+             "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+             "-find", r"VC\Auxiliary\Build\vcvarsall.bat"],
+            capture_output=True, text=True)
+        first = result.stdout.strip().splitlines()
+        if first and Path(first[0]).is_file():
+            return Path(first[0])
+    for pattern in ("*/Community/VC/Auxiliary/Build/vcvarsall.bat",
+                    "*/BuildTools/VC/Auxiliary/Build/vcvarsall.bat",
+                    "*/Enterprise/VC/Auxiliary/Build/vcvarsall.bat",
+                    "*/Professional/VC/Auxiliary/Build/vcvarsall.bat"):
+        found = sorted(Path("C:/Program Files/Microsoft Visual Studio").glob(pattern))
+        if found:
+            return found[-1]
+    return None
+
+
+def build_wincred():
+    """Ship git's own Windows Credential Manager helper.
+
+    Credentials were the one migration gap with no answer: Git Bash gets
+    credential.helper=manager from its own system gitconfig, which niu-git
+    cannot see, so a migrating user fell back to typing credentials at the
+    terminal. wincred is git's own helper - one C file, no perl, no MSYS - and
+    it reads the git:<protocol>://<host> entries already in the Windows
+    Credential Manager (the same names Git Credential Manager writes), so
+    stored credentials keep working. etc/gitconfig makes it the default.
+    """
+    source = SRC / "contrib" / "credential" / "wincred" / "git-credential-wincred.c"
+    if not source.is_file():
+        print("wincred source not in the tree; skipping the credential helper")
+        return
+    vcvars = find_vcvars()
+    if vcvars is None:
+        print("vcvarsall.bat not found; skipping the credential helper")
+        return
+    target = DIST / "mingw64" / "libexec" / "git-core" / "git-credential-wincred.exe"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    objects = BUILD / "wincred"
+    objects.mkdir(parents=True, exist_ok=True)
+    vcvars_arg = "x64_arm64" if ARCH_NAME == "arm64" else "x64"
+    script = ROOT / f"build-wincred-{ARCH_NAME}.bat"
+    script.write_text(
+        "@echo off\r\n"
+        f'call "{vcvars}" {vcvars_arg} >nul 2>&1\r\n'
+        # An explicit .obj path: "/Fo<dir>\" ends in a backslash before the
+        # closing quote, which the MSVC argument parser reads as an escaped
+        # quote and then swallows the source path ("missing source file
+        # name").
+        f'cl /nologo /O2 /DWIN32 /Fo"{objects}\\git-credential-wincred.obj" '
+        f'"{source}" advapi32.lib /Fe:"{target}"\r\n'
+        "exit /b %ERRORLEVEL%\r\n",
+        encoding="utf-8", newline="")
+    try:
+        run(["cmd", "/c", str(script)])
+    finally:
+        script.unlink(missing_ok=True)
+    if not target.is_file():
+        raise SystemExit("git-credential-wincred.exe was not produced")
+    print("credential helper ->", target.relative_to(ROOT))
+
+
 def configure():
     BUILD.mkdir(exist_ok=True)
     # Static zlib/iconv first in the search path (see VCPKG_STATIC_INSTALLED);
     # curl/EXPAT resolve from the dynamic triplet.
     prefix_path = os.pathsep.join(
         [VCPKG_STATIC_INSTALLED.as_posix(), VCPKG_INSTALLED.as_posix()])
+    # Reproducible, path-clean binaries:
+    #   /pathmap  rewrites the absolute source root baked into __FILE__ by
+    #             die()/BUG() (248 strings like "D:/repo/niu-git/src/http.c",
+    #             which leak the build layout to users and change the binary
+    #             from one build directory to the next);
+    #   /Brepro   drops the build-time PE timestamp so the same inputs produce
+    #             the same bytes (what makes a pinned sha256 verifiable).
+    source_root = SRC.resolve().as_posix()
+    # /pathmap needs /experimental:deterministic (otherwise cl warns D9007 and
+    # ignores the mapping); /Brepro on the link drops the wall-clock PE
+    # timestamp. Verified with a probe: __FILE__ becomes "src\probe.c" and the
+    # timestamp becomes a content checksum instead of the build date.
+    repro_flags = f"/experimental:deterministic /pathmap:{source_root}=src /Brepro"
     cmd = [
         # NOTE: upstream docs mention -DNO_VCPKG=TRUE but the code never reads
         # it (docs bug, PR candidate); the real switch is USE_VCPKG.
@@ -220,6 +307,8 @@ def configure():
         "-DSKIP_DASHED_BUILT_INS=ON",
         "-DBUILD_TESTING=OFF",
         "-DZLIB_USE_STATIC_LIBS=ON",
+        f"-DCMAKE_C_FLAGS={repro_flags}",
+        f"-DCMAKE_EXE_LINKER_FLAGS=/Brepro",
         f"-DCMAKE_PREFIX_PATH={prefix_path}",
         "-DCMAKE_INSTALL_PREFIX=" + (DIST / "mingw64").as_posix(),  # exe at <root>/mingw64/bin -> system config at <root>/etc (MinGit layout)
     ]
@@ -425,11 +514,18 @@ def collect():
     # resolving the missing DLL from its own vcpkg bin directory.
     collect_runtime_dlls()
     # The bundled curl supports schannel only; make it the default so plain
-    # `git clone https://...` works out of the box.
+    # `git clone https://...` works out of the box. The credential helper is
+    # git's own Windows Credential Manager one (built from contrib/credential/
+    # wincred): Git Bash gets its helper from a system gitconfig niu-git cannot
+    # see, so without this a migrating user is prompted at the terminal for
+    # every private remote. Entries are shared with Git Credential Manager
+    # (same git:<protocol>://<host> target names), and a user-level helper
+    # still runs after this one when wincred has nothing stored.
     etc = DIST / "etc"
     etc.mkdir(parents=True, exist_ok=True)
     (etc / "gitconfig").write_text(
-        "[http]\n\tsslBackend = schannel\n", encoding="utf-8", newline="\n")
+        "[http]\n\tsslBackend = schannel\n[credential]\n\thelper = wincred\n",
+        encoding="utf-8", newline="\n")
 
 
 def main():
@@ -454,6 +550,7 @@ def main():
     build()
     link_server_dashed()
     install_perl_shim()
+    build_wincred()
     collect()
     print("done.")
 
