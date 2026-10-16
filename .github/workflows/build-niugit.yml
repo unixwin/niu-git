@@ -81,7 +81,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}\.vcpkg-bincache
-          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('scripts/build.py') }}
+          # Keyed on the dependency list below, not on build.py: a script edit
+          # would otherwise invalidate the cache and rebuild curl from scratch
+          # (5-10 minutes per triplet). Bump the suffix whenever the install
+          # list changes.
+          key: vcpkg-${{ runner.os }}-${{ matrix.arch }}-deps1
           restore-keys: vcpkg-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Install vcpkg dependencies
