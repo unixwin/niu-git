@@ -1,0 +1,38 @@
+From: niu-git
+Subject: [PATCH] CMake: write GIT-BUILD-OPTIONS outside the BUILD_TESTING guard
+
+Justification (see patches/README.md): tools/generate-script.sh,
+tools/generate-perl.sh and tools/generate-python.sh source
+$CMAKE_BINARY_DIR/GIT-BUILD-OPTIONS, and their custom commands are not gated
+by BUILD_TESTING while the block that writes that file was. niu-git builds
+with -DBUILD_TESTING=OFF, so a clean build failed in every generator with
+"GIT-BUILD-OPTIONS: No such file or directory" - a reused build directory
+hid it locally until CI ran on a fresh one.
+
+--- a/contrib/buildsystems/CMakeLists.txt
++++ b/contrib/buildsystems/CMakeLists.txt
+@@ -1147,6 +1147,16 @@ string(REPLACE "@MERGE_TOOLS_DIR@" "${CMAKE_SOURCE_DIR}/mergetools" content "${c
+ string(REPLACE "@PROG@" "${CMAKE_BINARY_DIR}/git-cvsserver" content "${content}")
+ file(WRITE ${CMAKE_BINARY_DIR}/bin-wrappers/git-cvsserver ${content})
+ 
++# GIT-BUILD-OPTIONS is consumed by tools/generate-script.sh,
++# tools/generate-perl.sh and tools/generate-python.sh, and those custom
++# commands live outside BUILD_TESTING (see the shell/perl/python generation
++# blocks above). The block that writes it was inside, so a clean
++# -DBUILD_TESTING=OFF build failed in every generator with
++# "GIT-BUILD-OPTIONS: No such file or directory" (observed in CI; a reused
++# build directory hides it). Close the guard here and reopen it after the
++# file is written.
++endif()#BUILD_TESTING
++
+ #options for configuring test options
+ option(PERL_TESTS "Perform tests that use perl" ON)
+ option(PYTHON_TESTS "Perform tests that use python" ON)
+@@ -1245,6 +1255,7 @@ if(USE_VCPKG)
+ endif()
+ file(WRITE ${CMAKE_BINARY_DIR}/GIT-BUILD-OPTIONS ${git_build_options})
+ 
++if(BUILD_TESTING)
+ #Make the tests work when building out of the source tree
+ get_filename_component(CACHE_PATH ${CMAKE_CURRENT_LIST_DIR}/../../CMakeCache.txt ABSOLUTE)
+ if(NOT ${CMAKE_BINARY_DIR}/CMakeCache.txt STREQUAL ${CACHE_PATH})
