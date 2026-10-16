@@ -11,9 +11,12 @@ Fails (exit 1) when:
      die()/BUG()) is compiled through /pathmap, so a release must not contain
      strings such as "D:\\repo\\niu-git\\src\\http.c": they leak the build
      layout to users, differ between machines and break reproducibility.
-The dumpbin-based import checks stay in CI because they need the VS toolchain.
+The static-link check needs dumpbin: pass --require-dumpbin in CI (a missing
+dumpbin then fails the build instead of skipping the check).
 """
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -31,10 +34,50 @@ TRIMMED_FROM_BIN = ("git-upload-pack.exe", "git-receive-pack.exe",
 # from a build tree (our own name, or the CI/dev workspace roots).
 ABSOLUTE = re.compile(rb"[A-Za-z]:[\\/][ -~]{4,}")
 BUILD_PATH_HINTS = ("niu-git", "niugit", "\\repo\\", "/repo/")
+# zlib and iconv are linked statically into git.exe; a dynamic leak shows up
+# as these names in its import table.
+STATIC_ONLY_DLLS = ("zlib1.dll", "iconv-2.dll")
+
+
+def find_dumpbin():
+    override = os.environ.get("DUMPBIN")
+    if override and Path(override).is_file():
+        return Path(override)
+    for base in (os.environ.get("ProgramFiles"),
+                 os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+        if not base:
+            continue
+        hits = sorted(Path(base).glob(
+            "Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe"))
+        if hits:
+            return hits[-1]
+    return None
+
+
+def check_imports(dist, required, failures):
+    dumpbin = find_dumpbin()
+    git_exe = dist / "mingw64" / "bin" / "git.exe"
+    if dumpbin is None:
+        note = "dumpbin not found; static-link check skipped"
+        if required:
+            failures.append(note)
+        else:
+            print(f"check-dist: {note}")
+        return
+    result = subprocess.run([str(dumpbin), "/dependents", str(git_exe)],
+                            capture_output=True, text=True)
+    imports = (result.stdout + result.stderr).lower()
+    for dll in STATIC_ONLY_DLLS:
+        if dll in imports:
+            failures.append(f"git.exe still imports {dll}")
+    print(f"check-dist: git.exe imports no {'/'.join(STATIC_ONLY_DLLS)} "
+          "(static link OK)")
 
 
 def main() -> int:
-    dist = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    required = "--require-dumpbin" in sys.argv[1:]
+    dist = Path(args[0] if args else "dist")
     if not dist.is_dir():
         print(f"check-dist: {dist} is not a directory", file=sys.stderr)
         return 1
@@ -64,6 +107,9 @@ def main() -> int:
         for binary, hits in list(leaked.items())[:4]:
             for text in hits[:3]:
                 failures.append(f"    {binary}: {text}")
+
+    if dist.joinpath("mingw64", "bin", "git.exe").is_file():
+        check_imports(dist, required, failures)
 
     if failures:
         for line in failures:

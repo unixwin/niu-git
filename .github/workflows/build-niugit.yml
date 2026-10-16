@@ -134,18 +134,12 @@ jobs:
         shell: pwsh
         run: |
           $dist = if ("${{ matrix.arch }}" -eq "x64") { "dist" } else { "dist-${{ matrix.arch }}" }
-          # Layout, trimmed bin/, credential helper and build-path leakage.
-          python scripts/check-dist.py $dist
+          # Layout, trimmed bin/, credential helper, build-path leakage and the
+          # static zlib/iconv import table. --require-dumpbin makes a missing
+          # dumpbin a failure here (the script locates it itself, so this does
+          # not depend on the runner's Program Files layout).
+          python scripts/check-dist.py $dist --require-dumpbin
           if ($LASTEXITCODE -ne 0) { throw "check-dist failed for $dist" }
-          # Static zlib/iconv: the import table must not name them.
-          $gitExe = Join-Path $dist "mingw64\bin\git.exe"
-          $dumpbin = & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
-            -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
-          if (-not $dumpbin) { throw "dumpbin.exe not found" }
-          $imports = & $dumpbin /dependents $gitExe 2>&1 | Out-String
-          foreach ($dll in @("zlib1.dll", "iconv-2.dll")) {
-            if ($imports -match [regex]::Escape($dll)) { throw "git.exe still imports $dll" }
-          }
           Write-Host "layout + static-link + path checks passed for ${{ matrix.arch }}"
 
       - name: Run the upstream test subset (x64)
