@@ -1,0 +1,5 @@
+# Patch files are consumed by both git apply and patch(1); keep them byte-exact
+# on every checkout. GitHub's Windows runners check out with core.autocrlf=true,
+# which rewrote the patches as CRLF and made their context fail to match the
+# LF sources extracted from the upstream tarball ("patch does not apply").
+*.patch text eol=lf

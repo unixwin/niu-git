@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -135,6 +136,25 @@ def prepare():
 
 
 
+def normalized_patch(path, scratch):
+    """Return a patch path git apply can consume whatever the checkout did.
+
+    A checkout with core.autocrlf=true (the GitHub Windows runners) rewrites
+    patches/*.patch with CRLF line endings; git apply then fails to match the
+    LF sources extracted from the upstream tarball, reporting a context
+    mismatch far away from the real cause. .gitattributes pins eol=lf, and this
+    is the belt for a mangled checkout (a developer on a foreign setup, an
+    archive download, ...).
+    """
+    data = path.read_bytes()
+    if b"\r\n" not in data:
+        return path
+    fixed = scratch / path.name
+    fixed.write_bytes(data.replace(b"\r\n", b"\n"))
+    print(f"  note: {path.name} carries CRLF line endings; using a normalized copy")
+    return fixed
+
+
 def apply_patches():
     """Apply patches/*.patch to src/ (idempotent: skips applied patches)."""
     patches = sorted((ROOT / "patches").glob("*.patch"))
@@ -143,7 +163,9 @@ def apply_patches():
     sh = shutil.which("sh")
     git = shutil.which("git")
     rel_src = os.path.relpath(SRC, ROOT)
+    scratch = Path(tempfile.mkdtemp(prefix="niugit-patches-"))
     for p in patches:
+        patch = normalized_patch(p, scratch)
         print(f"applying {p.name}")
         # git apply is the primary applier: winuxcmd's patch(1) 1.1.8 does
         # not strip the a/ b/ prefixes under -p1, so it only works for
@@ -151,15 +173,15 @@ def apply_patches():
         # a reverse check so re-runs stay idempotent.
         if git:
             proc = subprocess.run(
-                [git, "apply", "--check", "-p1", f"--directory={rel_src}", str(p)],
+                [git, "apply", "--check", "-p1", f"--directory={rel_src}", str(patch)],
                 capture_output=True, text=True, cwd=ROOT)
             if proc.returncode == 0:
-                run([git, "apply", "-p1", f"--directory={rel_src}", str(p)],
+                run([git, "apply", "-p1", f"--directory={rel_src}", str(patch)],
                     cwd=ROOT)
                 continue
             rev = subprocess.run(
                 [git, "apply", "--reverse", "--check", "-p1",
-                 f"--directory={rel_src}", str(p)],
+                 f"--directory={rel_src}", str(patch)],
                 capture_output=True, text=True, cwd=ROOT)
             if rev.returncode == 0:
                 print("  already applied, skipping")
@@ -170,7 +192,7 @@ def apply_patches():
             # treat that as success, anything else is a real failure.
             proc = subprocess.run(
                 [sh, "-c",
-                 f"patch -d '{SRC.as_posix()}' -p1 -N -r - < '{p.as_posix()}'"],
+                 f"patch -d '{SRC.as_posix()}' -p1 -N -r - < '{patch.as_posix()}'"],
                 capture_output=True, text=True)
             output = proc.stdout + proc.stderr
             if proc.returncode == 0 or "Skipping patch" in output:
