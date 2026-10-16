@@ -16,7 +16,7 @@ import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-GIT_TAG = "v2.55.0.windows.2"
+GIT_TAG = "v2.56.0.windows.2"
 TARBALL = ROOT / f"git-src-{GIT_TAG}.tar.gz"
 SRC = ROOT / "src"
 BUILD = ROOT / "build"

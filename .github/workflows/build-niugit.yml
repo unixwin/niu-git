@@ -99,12 +99,18 @@ jobs:
             }
             throw "no iconv port (libiconv/iconv) installs for $triplet"
           }
-          # Dynamic triplet: curl (schannel TLS) and expat stay DLLs next to the
-          # remote helpers, exactly like the developer layout.
-          & $vcpkg install "zlib:${{ matrix.arch }}-windows" `
-                           "curl[schannel]:${{ matrix.arch }}-windows" `
-                           "expat:${{ matrix.arch }}-windows" --clean-after-build
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg (dynamic) failed" }
+          # The upstream curl port renamed its Windows TLS feature over time
+          # (curl[schannel] -> curl[ssl], which is schannel on Windows); try
+          # both spellings so a moving vcpkg registry cannot break the build.
+          $curlOk = $false
+          foreach ($spec in @("curl[schannel]:${{ matrix.arch }}-windows",
+                              "curl:${{ matrix.arch }}-windows")) {
+            & $vcpkg install "zlib:${{ matrix.arch }}-windows" $spec `
+                             "expat:${{ matrix.arch }}-windows" --clean-after-build
+            if ($LASTEXITCODE -eq 0) { Write-Host "curl spec accepted: $spec"; $curlOk = $true; break }
+            Write-Host "retrying: $spec was rejected by this vcpkg registry"
+          }
+          if (-not $curlOk) { throw "vcpkg could not install curl for ${{ matrix.arch }}-windows" }
           Install-Iconv "${{ matrix.arch }}-windows"
           # Static triplet: zlib and iconv are linked into git.exe so the bare
           # usr/bin/git.exe needs no DLL search path (patch 0003 + flat layout).
@@ -158,6 +164,21 @@ jobs:
           $env:JOBS = "4"
           & $bash scripts/test.sh
           if ($LASTEXITCODE -ne 0) { throw "test suite failed" }
+
+      - name: TLS smoke test against a real remote (x64)
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          # The product promise is schannel TLS through libcurl with no
+          # OpenSSL anywhere; only the x64 runner can execute the binary.
+          $git = "dist\mingw64\bin\git.exe"
+          & $git config --system --list | Out-String | Write-Host
+          & $git ls-remote https://github.com/unixwin/niu-git HEAD
+          if ($LASTEXITCODE -ne 0) { throw "git ls-remote over https failed (TLS backend broken?)" }
+          $openssl = Get-ChildItem dist -Recurse -Include *.dll |
+            Where-Object { $_.Name -match '^(lib)?(ssl|crypto|eay)' }
+          if ($openssl) { throw "OpenSSL-style DLL shipped: $($openssl.Name -join ', ')" }
+          Write-Host "https round trip OK, no OpenSSL DLLs shipped"
 
       - name: Package (${{ matrix.arch }})
         shell: pwsh
