@@ -26,6 +26,10 @@ REQUIRED = (
     "mingw64/libexec/git-core/git-receive-pack.exe",
     "mingw64/libexec/git-core/git-upload-archive.exe",
     "mingw64/libexec/git-core/git-credential-wincred.exe",
+    # The perl commands must exist under their dashed name (the .perl file
+    # alone is not what git looks up); perl itself is optional.
+    "mingw64/libexec/git-core/git-send-email",
+    "mingw64/libexec/git-core/git-svn",
     "etc/gitconfig",
 )
 TRIMMED_FROM_BIN = ("git-upload-pack.exe", "git-receive-pack.exe",

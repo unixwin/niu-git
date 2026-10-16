@@ -536,6 +536,17 @@ def collect():
     # zstd, ...) would ship a broken curl, and a developer machine hides it by
     # resolving the missing DLL from its own vcpkg bin directory.
     collect_runtime_dlls()
+    # git resolves the perl-script commands by their dashed, extension-less
+    # name (git-send-email), while the CMake install only drops the .perl
+    # form. Publishing the dashed copy makes the command exist and explain
+    # itself ("perl: not found") instead of "not a git command", and it starts
+    # working the moment a perl lands on PATH (an optional `wpm install perl`
+    # package is the intended route; nothing perl is bundled).
+    for script in ("git-send-email", "git-svn", "git-cvsimport",
+                   "git-cvsexportcommit", "git-cvsserver", "git-archimport"):
+        source = DIST / "mingw64" / "libexec" / "git-core" / f"{script}.perl"
+        if source.is_file():
+            shutil.copy2(source, source.with_suffix(""))
     # The bundled curl supports schannel only; make it the default so plain
     # `git clone https://...` works out of the box.
     #
