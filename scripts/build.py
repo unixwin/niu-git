@@ -7,6 +7,7 @@ Repo layout rules:
 - Build output lands in build/, distributable layout in dist/.
 """
 import argparse
+import hashlib
 import os
 import re
 import shutil
@@ -17,6 +18,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GIT_TAG = "v2.56.0.windows.2"
+# Byte size and sha256 of the codeload tarball for GIT_TAG. A truncated
+# download still extracts a usable-looking tree, so the patch step used to
+# fail with a baffling context mismatch ("patch does not apply") instead of
+# "the download was short" - seen in CI on 2026-10-16. prepare() verifies and
+# retries, and refuses to build from a mismatch.
+GIT_TARBALL_SIZE = 12870087
+GIT_TARBALL_SHA256 = "1b65aabab5892a2b2758aca64a2fda0a290b06e0eeab8116a9835cb712010f65"
+
 TARBALL = ROOT / f"git-src-{GIT_TAG}.tar.gz"
 SRC = ROOT / "src"
 BUILD = ROOT / "build"
@@ -52,27 +61,78 @@ def run(cmd, **kw):
     subprocess.run([str(c) for c in cmd], check=True, **kw)
 
 
+def tarball_digest(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tarball_is_complete(path):
+    if not path.exists():
+        return False
+    if path.stat().st_size != GIT_TARBALL_SIZE:
+        return False
+    return tarball_digest(path) == GIT_TARBALL_SHA256
+
+
 def prepare():
-    if TARBALL.exists() and TARBALL.stat().st_size < 1_000_000:
-        TARBALL.unlink()
-    if not TARBALL.exists():
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        if tarball_is_complete(TARBALL):
+            break
+        if TARBALL.exists():
+            print(f"{TARBALL.name} is incomplete or stale; re-downloading")
+            TARBALL.unlink()
         url = (
             "https://codeload.github.com/git-for-windows/git/tar.gz/"
             f"refs/tags/{GIT_TAG}"
         )
-        print(f"downloading {url}")
+        print(f"downloading {url} (attempt {attempt}/{attempts})")
         run([sys.executable, "-c",
              f"import urllib.request; urllib.request.urlretrieve({url!r}, {str(TARBALL)!r})"])
+    if not tarball_is_complete(TARBALL):
+        actual = TARBALL.stat().st_size if TARBALL.exists() else 0
+        raise SystemExit(
+            f"{TARBALL.name} is not the expected archive "
+            f"(size {actual}, want {GIT_TARBALL_SIZE}; sha256 "
+            f"{tarball_digest(TARBALL) if TARBALL.exists() else 'n/a'}); "
+            "re-run to retry the download")
     if SRC.exists():
         shutil.rmtree(SRC)
     SRC.mkdir(parents=True)
     print(f"extracting {TARBALL.name} -> {SRC}")
-    with tarfile.open(TARBALL) as t:
-        t.extractall(SRC, filter="tar")
+    try:
+        with tarfile.open(TARBALL) as t:
+            t.extractall(SRC, filter="tar")
+    except (OSError, tarfile.TarError) as exc:
+        # A Windows host without symlink privileges cannot materialise the
+        # symlinks the upstream tree carries (RelNotes, subprojects/git-gui,
+        # subprojects/gitk). None of them are build inputs, so extract what
+        # we can instead of aborting a byte-verified archive.
+        print(f"  note: {exc}; retrying member by member")
+        if SRC.exists():
+            shutil.rmtree(SRC)
+        SRC.mkdir(parents=True)
+        with tarfile.open(TARBALL) as t:
+            for member in t:
+                try:
+                    t.extract(member, SRC, filter="tar")
+                except (OSError, tarfile.TarError):
+                    continue
     inner = next(p for p in SRC.iterdir() if p.is_dir())
     for p in inner.iterdir():
         p.rename(SRC / p.name)
     inner.rmdir()
+    # Sentinels the patch series and the build depend on.
+    for sentinel in ("http.c", "exec-cmd.c", "compat/mingw.c",
+                     "contrib/buildsystems/CMakeLists.txt"):
+        target = SRC / sentinel
+        if not target.is_file():
+            raise SystemExit(f"extracted tree is missing {sentinel}; download or "
+                             "extraction is incomplete")
+
 
 
 def apply_patches():
