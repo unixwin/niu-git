@@ -81,7 +81,11 @@ The `sha256` and `size` match the local build
 keep the `niu-git-` file-name prefix — v2.55.0.4 was uploaded as
 `niugit-...zip` and its index URL has 404'd ever since). The existing `git`
 entry (MinGit) stays untouched until niu-git is promoted to be the default.
-Installed users migrate with `wpm install niugit --force`.
+Installed users migrate with `wpm install niugit --force`. The flat layout
+needs **WinuxCmd/wpm 1.1.9 or newer**: older wpm broke the `usr\bin` command
+hardlink with a plain `DeleteFileW`, which self-locks against the running
+`wpm.exe` and failed with `failed to break WinuxCmd hardlink ... Access
+denied`. Update first (`wpm update winuxcmd`), then run the install.
 
 ## Build
 
