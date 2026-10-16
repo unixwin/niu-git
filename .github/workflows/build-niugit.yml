@@ -214,7 +214,9 @@ jobs:
       - name: Unpack and run
         shell: pwsh
         run: |
-          $zip = Get-ChildItem arm64 -Filter "*.zip" | Select-Object -First 1
+          # The artifact keeps the dist layout (dist-arm64/niu-git-*.zip), so
+          # the search has to recurse.
+          $zip = Get-ChildItem arm64 -Recurse -Filter "*.zip" | Select-Object -First 1
           if (-not $zip) { throw "no arm64 zip downloaded" }
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath arm64-root -Force
           $git = "arm64-root\mingw64\bin\git.exe"
