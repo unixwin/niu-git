@@ -324,6 +324,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.WPM_SOURCE_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           cd wpm-source
@@ -346,5 +347,3 @@ jobs:
           fi
           gh pr merge "$pr_url" --repo unixwin/wpm-source --squash --delete-branch || \
             gh pr merge "$pr_url" --repo unixwin/wpm-source --squash --delete-branch --auto
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
