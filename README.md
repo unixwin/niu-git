@@ -28,8 +28,10 @@ Phase 0 PoC **done**: MSVC + CMake + vcpkg build of git-for-windows v2.55.0.wind
   exec-path/templates/system config with no wrapper env at all
 - Dispatcher retired (v2.55.0.5): the root entry launcher is no longer
   shipped — with patch #3 the real `mingw64/bin/git.exe` maps straight to
-  `<root>/usr/bin/git.exe`, removing the ~45 ms launcher+dispatcher hop
-  (72-83 ms -> ~20 ms for `git --version`). `scripts/entry/launch-git.c`
+  `<root>/usr/bin/git.exe`, removing the launcher+dispatcher hop. Measured on
+  a real `wpm` flat install: `git --version` 13.7 ms avg / 11.5 ms min
+  (shim chain: 48.5 ms avg / 43.9 ms min), `git status` 22.6 ms avg.
+  `scripts/entry/launch-git.c`
   stays buildable (`build.py --entry-only`) for the differential suite
   below; it forwarded argv byte-exactly using standard Windows quoting
   rules (quotes/trailing backslashes round-trip, `commit -m` payloads,
@@ -81,11 +83,22 @@ The `sha256` and `size` match the local build
 keep the `niu-git-` file-name prefix — v2.55.0.4 was uploaded as
 `niugit-...zip` and its index URL has 404'd ever since). The existing `git`
 entry (MinGit) stays untouched until niu-git is promoted to be the default.
-Installed users migrate with `wpm install niugit --force`. The flat layout
-needs **WinuxCmd/wpm 1.1.9 or newer**: older wpm broke the `usr\bin` command
-hardlink with a plain `DeleteFileW`, which self-locks against the running
-`wpm.exe` and failed with `failed to break WinuxCmd hardlink ... Access
-denied`. Update first (`wpm update winuxcmd`), then run the install.
+Installed users migrate with:
+
+```
+wpm update winuxcmd          # wpm >= 1.1.9 is required, see below
+wpm install niugit --force   # replaces the usr/bin/git.exe shim with the real binary
+```
+
+The flat layout needs **WinuxCmd/wpm 1.1.9 or newer**: older wpm broke the
+`usr\bin` command hardlink with a plain `DeleteFileW`, which self-locks
+against the running `wpm.exe` image and failed with `failed to break
+WinuxCmd hardlink ... Access denied`. The upgrade overwrites the payload
+under `opt/niugit/` in place, so the retired shim launcher
+`opt/niugit/git.exe` (and stale files inside the payload directories) can
+survive; the launcher is unreferenced and safe to delete. Running
+`wpm uninstall niugit -y` before the install rebuilds the payload
+directories from scratch instead.
 
 ## Build
 
