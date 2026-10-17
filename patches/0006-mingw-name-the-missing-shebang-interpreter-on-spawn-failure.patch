@@ -1,0 +1,122 @@
+From: niu-git
+Subject: [PATCH] mingw: name the missing shebang interpreter on spawn failure
+
+Justification (see patches/README.md): companion to
+0005-run-command-fail-cleanly-when-no-shell-is-on-PATH (unixwin/niu-git#14)
+and the fix for unixwin/niu-git#15.
+
+A hook script's interpreter lives in its shebang, so hooks take a
+different road from "!"/use_shell commands: mingw_spawnvpe() resolves
+the "#!/bin/sh" basename, and when that lookup fails it sets errno =
+ENOENT on the spawn. run-command.c then reports
+
+    error: cannot spawn hooks/pre-commit: No such file or directory
+
+against a file that exists and is executable; errno has no canonical
+spelling for "the interpreter is missing", so the real problem - the
+missing sh on PATH - is invisible. (Git for Windows never hits this:
+its sh.exe is always first on PATH.)
+
+Record the failed interpreter lookup in compat/mingw.c
+(mingw_missing_shell(), declared next to mingw_spawnvpe in
+compat/mingw-posix.h) and let the windows branch of start_command()
+report it:
+
+    error: cannot spawn hooks/pre-commit: no 'sh' found on PATH
+
+The flag is reset at the top of every spawn attempt; the diagnostic is
+read right after the failed spawn on the same thread, which is how
+run-command.c consumes it. silent_exec_failure spawns (e.g. hooks with
+GIT_QUIET spawn logic) keep skipping the message as before.
+
+---
+--- a/run-command.c
++++ b/run-command.c
+@@ -947,8 +959,22 @@ int start_command(struct child_process *cmd)
+ 				  (char**) cmd->env.v,
+ 				  cmd->dir, fhin, fhout, fherr);
+ 	failed_errno = errno;
+-	if (cmd->pid < 0 && (!cmd->silent_exec_failure || errno != ENOENT))
+-		error_errno("cannot spawn %s", cmd->args.v[0]);
++	if (cmd->pid < 0 && (!cmd->silent_exec_failure || errno != ENOENT)) {
++		/*
++		 * A spawn can fail with ENOENT because the POSIX
++		 * interpreter the command's shebang names (typically sh)
++		 * could not be found on PATH; errno spells "No such file
++		 * or directory" either way, and naming the child instead
++		 * sends the reader chasing the hook, not the interpreter.
++		 */
++		const char *missed_shell = mingw_missing_shell();
++
++		if (missed_shell)
++			error(_("cannot spawn %s: no '%s' found on PATH"),
++			      cmd->args.v[0], missed_shell);
++		else
++			error_errno("cannot spawn %s", cmd->args.v[0]);
++	}
+ 	if (cmd->clean_on_exit && cmd->pid >= 0)
+ 		mark_child_for_cleanup(cmd->pid, cmd);
+
+--- a/compat/mingw.c
++++ b/compat/mingw.c
+@@ -2428,6 +2428,26 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
+ 	return (pid_t)pi.dwProcessId;
+ }
+ 
++/*
++ * Diagnosability for spawn failures: when the interpreter named by a
++ * script's shebang (most often "#!/bin/sh") is not on PATH the spawn
++ * fails with errno ENOENT, indistinguishable from the script file
++ * itself being missing, and the caller reports the *child* as missing
++ * ("cannot spawn hooks/pre-commit: No such file or directory") while
++ * the hook exists and is executable. Remember which interpreter a
++ * failed spawn attempt could not resolve so callers can report the
++ * lookup that actually failed. Reset at the top of every spawn
++ * attempt; a spawn failure is only ever diagnosed right after the
++ * same attempt returned, on the thread that ran it, which is how
++ * run-command.c consumes the flag.
++ */
++static const char *missing_shell;
++
++const char *mingw_missing_shell(void)
++{
++	return missing_shell;
++}
++
+ static pid_t mingw_spawnv(const char *cmd, const char **argv,
+ 			  const char *prepend_cmd)
+ {
+@@ -2441,6 +2461,8 @@ pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **deltaenv,
+ 	pid_t pid;
+ 	char *prog = path_lookup(cmd, 0);
+ 
++	missing_shell = NULL;
++
+ 	if (!prog) {
+ 		errno = ENOENT;
+ 		pid = -1;
+@@ -2453,6 +2475,7 @@ pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **deltaenv,
+ 			char *iprog = path_lookup(interpr, 1);
+ 			argv[0] = prog;
+ 			if (!iprog) {
++				missing_shell = interpr;
+ 				errno = ENOENT;
+ 				pid = -1;
+ 			}
+
+--- a/compat/mingw-posix.h
++++ b/compat/mingw-posix.h
+@@ -418,6 +418,13 @@ size_t mingw_strftime(char *s, size_t max,
+ pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **env,
+ 		     const char *dir,
+ 		     int fhin, int fhout, int fherr);
++
++/*
++ * The POSIX interpreter a failed spawn attempt could not resolve on
++ * PATH (see compat/mingw.c), or NULL when that attempt did not fail on
++ * an interpreter lookup; failed hook spawns are the main consumer.
++ */
++extern const char *mingw_missing_shell(void);
+ int mingw_execvp(const char *cmd, char *const *argv);
+ #define execvp mingw_execvp
+ int mingw_execv(const char *cmd, char *const *argv);

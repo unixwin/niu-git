@@ -1,0 +1,59 @@
+From: niu-git
+Subject: [PATCH] run-command: fail cleanly when no POSIX shell is on PATH
+
+Justification (see patches/README.md): niu-git deliberately ships no POSIX
+interpreter (wpm/niugit.json: "hooks run via sh found on PATH"). Git for
+Windows never runs this code with a missing shell, because its bundled
+sh.exe is always first on PATH; niu-git exercises it and paid the bill.
+
+Upstream, git_shell_path()'s windows branch hands the NULL that
+locate_in_PATH("sh") returns when no shell is reachable straight into
+convert_slashes(), and the inline loop in compat/mingw.h dereferences
+it: every use_shell command - "!"-aliases above all - dies with an
+access violation (exit 0xC0000005) and no output. unixwin/niu-git#14.
+
+Guard the NULL, and make prepare_shell_cmd(), the one place a missing
+shell is fatal, die() with a message that names the command that
+needed a shell and what was missed, instead of crashing:
+
+    fatal: cannot run 'echo hi': no shell found on PATH
+
+POSIX (non-native) builds are untouched: there git_shell_path() returns
+the build-time SHELL_PATH and never NULL. "git var GIT_SHELL_PATH" on a
+shellless install now exits 1 with no output (var.c already treats a
+NULL read as unset) instead of taking the process down.
+
+---
+--- a/run-command.c
++++ b/run-command.c
+@@ -279,8 +279,16 @@ char *git_shell_path(void)
+ #ifndef GIT_WINDOWS_NATIVE
+ 	return xstrdup(SHELL_PATH);
+ #else
++	/*
++	 * niu-git bases shell-script execution on the sh found on PATH and
++	 * ships no interpreter of its own; locate_in_PATH() then returns
++	 * NULL. Handing that NULL to convert_slashes() dereferenced it and
++	 * killed the process with an access violation, so guard it: callers
++	 * treat a NULL return as "there is no shell" and fail cleanly.
++	 */
+ 	char *p = locate_in_PATH("sh");
+-	convert_slashes(p);
++	if (p)
++		convert_slashes(p);
+ 	return p;
+ #endif
+ }
+@@ -291,7 +299,11 @@ static const char **prepare_shell_cmd(struct strvec *out, const char **argv)
+ 		BUG("shell command is empty");
+ 
+ 	if (strcspn(argv[0], "|&;<>()$`\\\"' \t\n*?[#~=%") != strlen(argv[0])) {
+-		strvec_push_nodup(out, git_shell_path());
++		char *shell = git_shell_path();
++
++		if (!shell)
++			die(_("cannot run '%s': no shell found on PATH"), argv[0]);
++		strvec_push_nodup(out, shell);
+ 		strvec_push(out, "-c");
+ 
+ 		/*
