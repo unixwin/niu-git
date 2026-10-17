@@ -9,7 +9,7 @@ message bytes, reflog, status) byte-for-byte. Message payloads are additionally
 asserted against their *intended literal bytes*, independent of the
 differential (guards against both stacks sharing a bug, e.g. rewriting
 `commit -m /c` into `c:/`). Behavior-only cases (missing-shell regressions,
-e.g. issue #14) instead assert the exit code and message shape on both stacks.
+issues #14/#15) instead assert the exit code and message shape on both stacks.
 
 Target selection (first match wins):
   NIUGIT_TEST_WRAPPER / NIUGIT_TEST_REAL   explicit exe paths
@@ -153,6 +153,18 @@ CASES = [
          runs=[["-c", "alias.p=!echo hi", "p"]],
          env={"PATH": r"C:\Windows\System32"},
          checks=["rc:128", "err~:no shell found on PATH"]),
+    # ---- issue #15: a failing hook spawn must name the missing interpreter ----
+    # The hook exists and is executable; what is missing is the sh its
+    # shebang resolves to. ENOENT ("No such file or directory") describes
+    # neither and was previously printed against the hook itself.
+    Case("sh-missing/hook-shebang",
+         setup_files={"hooks/pre-commit": b"#!/bin/sh\nexit 1\n"},
+         runs=[["add", "f.txt"],
+               ["-c", "core.hooksPath=hooks", "commit", "-q", "-m", "hook blocks the commit"]],
+         env={"PATH": r"C:\Windows\System32"},
+         checks=["rc:1", "err~:cannot spawn hooks/pre-commit",
+                 "err~:no 'sh' found on PATH",
+                 "err!~:No such file or directory"]),
 ]
 
 

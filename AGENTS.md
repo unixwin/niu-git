@@ -66,7 +66,9 @@ vcpkg into a MinGit-style `dist/`. `src/` is fetched, never committed.
 - **0005 exists because a shellless install crashed instead of failing**:
   upstream hands the NULL from `locate_in_PATH("sh")` to
   `convert_slashes()`, so `!`-aliases and other `use_shell` commands died
-  with 0xC0000005 (see issue #14) whenever no `sh` was on PATH.
+  with 0xC0000005 (see issue #14) whenever no `sh` was on PATH. 0006
+  reports the missed shebang interpreter instead of the misleading
+  hook-file ENOENT (issue #15).
 - **0004 exists because a clean `-DBUILD_TESTING=OFF` build cannot work
   upstream**: the block that writes `$CMAKE_BINARY_DIR/GIT-BUILD-OPTIONS` sits
   inside `if(BUILD_TESTING)` while `tools/generate-{script,perl,python}.sh`
