@@ -8,7 +8,8 @@ and compares stdout/stderr/exit code plus repo end state (HEAD bytes, commit
 message bytes, reflog, status) byte-for-byte. Message payloads are additionally
 asserted against their *intended literal bytes*, independent of the
 differential (guards against both stacks sharing a bug, e.g. rewriting
-`commit -m /c` into `c:/`).
+`commit -m /c` into `c:/`). Behavior-only cases (missing-shell regressions,
+e.g. issue #14) instead assert the exit code and message shape on both stacks.
 
 Target selection (first match wins):
   NIUGIT_TEST_WRAPPER / NIUGIT_TEST_REAL   explicit exe paths
@@ -67,7 +68,7 @@ def norm(b):
     return OID_RE.sub(b"<OID>", b) if isinstance(b, bytes) else b
 
 
-def run(exe, args, cwd, stdin=None, timeout=60):
+def run(exe, args, cwd, stdin=None, timeout=60, env=None):
     e = dict(os.environ)
     for k in list(e):
         if k.startswith("GIT_"):
@@ -76,6 +77,7 @@ def run(exe, args, cwd, stdin=None, timeout=60):
     # equalize PATH (the launcher prepends its mingw64/bin by design; give the
     # real side the same so the comparison isolates argv fidelity)
     e["PATH"] = os.path.join(os.path.dirname(exe), "mingw64", "bin") + ";" + e.get("PATH", "")
+    e.update(env or {})
     try:
         p = subprocess.run([exe] + args, cwd=cwd, capture_output=True,
                            env=e, input=stdin, timeout=timeout)
@@ -85,11 +87,17 @@ def run(exe, args, cwd, stdin=None, timeout=60):
 
 
 class Case:
-    def __init__(self, name, msg=None, runs=None, check_msgs=None):
+    def __init__(self, name, msg=None, runs=None, check_msgs=None,
+                 setup_files=None, env=None, checks=None):
         """msg: literal bytes committed via `commit -m` (asserted byte-exact in
         HEAD, including the trailing newline). runs: list of arg-lists to run
         in order; defaults to a single commit for `msg` cases. check_msgs:
-        {key: expected bytes} additional annotation assertions (e.g. tags)."""
+        {key: expected bytes} additional annotation assertions (e.g. tags).
+        setup_files: {relpath: bytes} written into each repo before running.
+        env: {var: value} merged over the per-run environment (e.g. a scrubbed
+        PATH). checks: assertions on the last run's result, applied to both
+        stacks: "rc:<int>", "err~:<substr>", "err!~:<substr>" (must not
+        contain), "out~:<substr>"."""
         self.name = name
         self.msg = msg.encode() if isinstance(msg, str) else msg
         if runs is None:
@@ -99,6 +107,9 @@ class Case:
                 runs = []
         self.runs = runs
         self.check_msgs = check_msgs or {}
+        self.setup_files = setup_files or {}
+        self.env = env or {}
+        self.checks = checks or []
 
 
 CASES = [
@@ -133,14 +144,30 @@ CASES = [
          runs=[["commit", "-q", "-m", "base", "--allow-empty"],
                ["tag", "-a", "-m", "/c", "v1"]],
          check_msgs={"tag:v1": b"/c\n"}),
+    # ---- issue #14: use_shell must not AV when no sh is on PATH ----
+    # PATH scrubbed to a dir without sh.exe (System32 carries none); the
+    # wrapper prepends its own mingw64/bin, which ships no shell either, so
+    # both stacks must resolve the same failing lookup. A clean fatal exit
+    # (128) replaces the access violation (3221225477).
+    Case("sh-missing/alias",
+         runs=[["-c", "alias.p=!echo hi", "p"]],
+         env={"PATH": r"C:\Windows\System32"},
+         checks=["rc:128", "err~:no shell found on PATH"]),
 ]
 
 
-def make_repo(base, name):
+def make_repo(base, name, setup_files=None):
     path = os.path.join(base, name)
     os.makedirs(path)
     with open(os.path.join(path, "f.txt"), "w", newline="") as f:
         f.write("hello world\n")
+    if setup_files:
+        for rel, data in setup_files.items():
+            dst = os.path.join(path, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            mode = "wb" if isinstance(data, bytes) else "w"
+            with open(dst, mode) as f:
+                f.write(data)
     return path
 
 
@@ -192,11 +219,13 @@ def main(only=None):
             total += 1
             diffs = []
             states = {}
+            results = {}
             for side, exe in (("wrapper", wrapper), ("real", real)):
-                repo = make_repo(base, f"{c.name.replace('/', '_')}.{side}")
+                repo = make_repo(base, f"{c.name.replace('/', '_')}.{side}",
+                                 setup_files=c.setup_files)
                 run(real, ["init", "-q", "-b", "main"], repo)
                 for args in c.runs:
-                    run(exe, args, repo)
+                    results[side] = run(exe, args, repo, env=c.env)
                 states[side] = repo_state(repo, real)
             # 1. absolute message-byte assertions (catches shared-stack bugs).
             # git's default commit-message cleanup strips buffer-trailing
@@ -216,6 +245,30 @@ def main(only=None):
             for k in ("HEAD", "reflog", "status"):
                 if fw[k] != fg[k]:
                     diffs.append(f"{k}: wrapper={fw[k]!r} real={fg[k]!r}")
+            # 3. per-run behavior assertions (missing-shell cases etc.)
+            if c.checks:
+                rc, out, err = results["real"]
+                text = err.decode("utf-8", "replace") + "\n" + out.decode("utf-8", "replace")
+                for spec in c.checks:
+                    kind, _, val = spec.partition(":")
+                    okval = False
+                    if kind == "rc":
+                        okval = rc == int(val)
+                        label = f"rc={rc}"
+                    elif kind == "err~":
+                        okval = val in err.decode("utf-8", "replace")
+                        label = f"stderr: {text.strip()!r}"
+                    elif kind == "err!~":
+                        okval = val not in err.decode("utf-8", "replace")
+                        label = f"stderr: {err.decode('utf-8', 'replace').strip()!r}"
+                    elif kind == "out~":
+                        okval = val in out.decode("utf-8", "replace")
+                        label = f"stdout: {out.decode('utf-8', 'replace')!r}"
+                    else:
+                        diffs.append(f"check {spec!r}: unknown kind")
+                        continue
+                    if not okval:
+                        diffs.append(f"check {spec!r} failed ({label})")
             if diffs:
                 failures += 1
                 print(f"[FAIL] {c.name}")

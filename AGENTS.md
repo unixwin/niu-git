@@ -61,7 +61,12 @@ vcpkg into a MinGit-style `dist/`. `src/` is fetched, never committed.
 - Every patch needs a header (`From:`/`Subject:`) plus a justification, per
   `patches/README.md`. Current set: 0001 sslBackend tolerance, 0002
   POSIX-shaped path args, 0003 `system_prefix` self-location (required by
-  wpm's flat layout), 0004 CMake `GIT-BUILD-OPTIONS` (see below).
+  wpm's flat layout), 0004 CMake `GIT-BUILD-OPTIONS` (see below), 0005
+  clean failure when no POSIX shell is on PATH (niu-git ships none).
+- **0005 exists because a shellless install crashed instead of failing**:
+  upstream hands the NULL from `locate_in_PATH("sh")` to
+  `convert_slashes()`, so `!`-aliases and other `use_shell` commands died
+  with 0xC0000005 (see issue #14) whenever no `sh` was on PATH.
 - **0004 exists because a clean `-DBUILD_TESTING=OFF` build cannot work
   upstream**: the block that writes `$CMAKE_BINARY_DIR/GIT-BUILD-OPTIONS` sits
   inside `if(BUILD_TESTING)` while `tools/generate-{script,perl,python}.sh`
