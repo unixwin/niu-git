@@ -18,14 +18,14 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-GIT_TAG = "v2.56.0.windows.3"
+GIT_TAG = "v2.56.0.windows.4"
 # Byte size and sha256 of the codeload tarball for GIT_TAG. A truncated
 # download still extracts a usable-looking tree, so the patch step used to
 # fail with a baffling context mismatch ("patch does not apply") instead of
 # "the download was short" - seen in CI on 2026-10-16. prepare() verifies and
 # retries, and refuses to build from a mismatch.
-GIT_TARBALL_SIZE = 12870689
-GIT_TARBALL_SHA256 = "d3aa97f2ccc285f0621d8ee77b16d4253f84371569d16814cc9bcef30f907653"
+GIT_TARBALL_SIZE = 12871354
+GIT_TARBALL_SHA256 = "34f83d6af52f09b997e295db337ede5bbd1613db4405c4b32a05fc9c5363758c"
 
 TARBALL = ROOT / f"git-src-{GIT_TAG}.tar.gz"
 SRC = ROOT / "src"
