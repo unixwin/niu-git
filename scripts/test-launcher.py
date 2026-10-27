@@ -105,7 +105,14 @@ def substitute(args, forms):
     out = []
     for a in args:
         for tok, val in forms.items():
-            a = a.replace(tok, val)
+            # Message payloads travel as bytes (their exact bytes are the
+            # assertion); replace in the arg's own type so a bytes arg
+            # never meets a str token. The tokens are pure ASCII, so the
+            # encode is exact and non-token bytes pass through untouched.
+            if isinstance(a, bytes):
+                a = a.replace(tok.encode(), val.encode())
+            else:
+                a = a.replace(tok, val)
         out.append(a)
     return out
 
