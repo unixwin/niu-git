@@ -142,6 +142,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "check-dist failed for $dist" }
           Write-Host "layout + static-link + path checks passed for ${{ matrix.arch }}"
 
+      - name: Show the runner layout for the launcher suite (x64)
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          # The issue #18 /tmp pins discriminate on the cwd drive, so the
+          # run log has to show which drives the runner actually has and
+          # where %TEMP% lives; without this a pass cannot be told from
+          # the alt-drive pin silently falling back to the repo drive.
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host "TEMP=$env:TEMP"
+          python --version
+
+      - name: Run the launcher differential suite (x64)
+        if: matrix.arch == 'x64'
+        shell: cmd
+        env:
+          NIUGIT_VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
+        run: |
+          call "${{ steps.locate_vcvars.outputs.vcvars_path }}" ${{ matrix.vcvars_arg }}
+          if errorlevel 1 exit /b 1
+          rem The flat layout ships no root launcher (collect() removes
+          rem it), but test-launcher.py compares the entry launcher
+          rem against the real binary inside the dist tree; rebuild just
+          rem the launcher into dist/ for the suite. The package step
+          rem only zips mingw64 + etc, so the artifact is unchanged.
+          python scripts/build.py --entry-only
+          if errorlevel 1 exit /b 1
+          python scripts/test-launcher.py
+
       - name: Run the upstream test subset (x64)
         if: matrix.arch == 'x64'
         shell: pwsh
