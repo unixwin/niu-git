@@ -86,18 +86,74 @@ def run(exe, args, cwd, stdin=None, timeout=60, env=None):
         return "TIMEOUT", b"", b""
 
 
+def dialect_forms(path, stem):
+    """POSIX dialect spellings of a native Windows path (issue #18):
+    {STEM} is the path itself, plus its forward-slash form and the
+    /<drive>, /mnt/<drive> and /cygdrive/<drive> spellings of it."""
+    drive = path[0]
+    rest = path[2:].replace("\\", "/")
+    return {
+        "{" + stem + "}": path,
+        "{" + stem + "_FWD}": path.replace("\\", "/"),
+        "{" + stem + "_POSIX}": "/" + drive + rest,
+        "{" + stem + "_MNT}": "/mnt/" + drive + rest,
+        "{" + stem + "_CYG}": "/cygdrive/" + drive + rest,
+    }
+
+
+def substitute(args, forms):
+    out = []
+    for a in args:
+        for tok, val in forms.items():
+            # Message payloads travel as bytes (their exact bytes are the
+            # assertion); replace in the arg's own type so a bytes arg
+            # never meets a str token. The tokens are pure ASCII, so the
+            # encode is exact and non-token bytes pass through untouched.
+            if isinstance(a, bytes):
+                a = a.replace(tok.encode(), val.encode())
+            else:
+                a = a.replace(tok, val)
+        out.append(a)
+    return out
+
+
+_alt_cwd_dirs = []
+
+
+def alt_drive_dir(repo):
+    """A scratch dir on a different drive than the repo, for the
+    issue #18 /tmp drift pin (the landing must not follow the cwd
+    drive). None when no second writable drive exists; the pin then
+    runs from the repo itself and still discriminates."""
+    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        if letter == repo[0].upper():
+            continue
+        try:
+            d = tempfile.mkdtemp(prefix="niugit-altcwd-",
+                                 dir=letter + ":\\")
+        except OSError:
+            continue
+        _alt_cwd_dirs.append(d)
+        return d
+    return None
+
+
 class Case:
     def __init__(self, name, msg=None, runs=None, check_msgs=None,
-                 setup_files=None, env=None, checks=None):
+                 setup_files=None, env=None, checks=None,
+                 cwd_alt_drive=False):
         """msg: literal bytes committed via `commit -m` (asserted byte-exact in
         HEAD, including the trailing newline). runs: list of arg-lists to run
-        in order; defaults to a single commit for `msg` cases. check_msgs:
-        {key: expected bytes} additional annotation assertions (e.g. tags).
-        setup_files: {relpath: bytes} written into each repo before running.
-        env: {var: value} merged over the per-run environment (e.g. a scrubbed
-        PATH). checks: assertions on the last run's result, applied to both
-        stacks: "rc:<int>", "err~:<substr>", "err!~:<substr>" (must not
-        contain), "out~:<substr>"."""
+        in order; defaults to a single commit for `msg` cases. Run args may
+        embed dialect tokens ({REPO}, {REPO_MNT}, {BASE_CYG}, {ROOT_POSIX},
+        {REPO_TMP}, ...; see dialect_forms), substituted per side before
+        running. check_msgs: {key: expected bytes} additional annotation
+        assertions (e.g. tags). setup_files: {relpath: bytes} written into
+        each repo before running. env: {var: value} merged over the per-run
+        environment (e.g. a scrubbed PATH). checks: assertions on the last
+        run's result, applied to both stacks: "rc:<int>", "err~:<substr>",
+        "err!~:<substr>" (must not contain), "out~:<substr>".
+        cwd_alt_drive: run from a scratch dir on another drive."""
         self.name = name
         self.msg = msg.encode() if isinstance(msg, str) else msg
         if runs is None:
@@ -110,6 +166,7 @@ class Case:
         self.setup_files = setup_files or {}
         self.env = env or {}
         self.checks = checks or []
+        self.cwd_alt_drive = cwd_alt_drive
 
 
 CASES = [
@@ -165,6 +222,82 @@ CASES = [
          checks=["rc:1", "err~:cannot spawn hooks/pre-commit",
                  "err~:no 'sh' found on PATH",
                  "err!~:No such file or directory"]),
+    # ---- issue #18: the -C dialect set matches the family's ----
+    # git -C must accept every spelling the family accepts for the same
+    # directory: the twin repos live under %TEMP%, so {REPO_TMP} is the
+    # issue's discriminating probe (a repo under %TEMP% addressed via
+    # /tmp/...). "not a git repository" (rc 128) proves the chdir
+    # landed and only repo discovery failed; "cannot change to" is the
+    # dialect miss. Missing targets must keep the original literal in
+    # the diagnostic (the conversion's both-spellings-fail invariant).
+    Case("cd/win-backslash",
+         runs=[["-C", "{REPO}", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"]),
+    Case("cd/win-fwdslash",
+         runs=[["-C", "{REPO_FWD}", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"]),
+    Case("cd/posix-drive",
+         runs=[["-C", "{REPO_POSIX}", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"]),
+    Case("cd/mnt-drive",
+         runs=[["-C", "{REPO_MNT}", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"]),
+    Case("cd/cygdrive",
+         runs=[["-C", "{REPO_CYG}", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"]),
+    Case("cd/tmp-dialect",
+         runs=[["-C", "{REPO_TMP}", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"]),
+    Case("cd/tmp-dialect-alt-cwd",
+         runs=[["-C", "{REPO_TMP}", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"],
+         cwd_alt_drive=True),
+    Case("cd/relative",
+         runs=[["-C", ".", "status", "--porcelain"]],
+         checks=["rc:0", "out~:?? f.txt"]),
+    Case("cd/gitdir-mnt",
+         runs=[["-C", "{REPO_MNT}/.git", "status"]],
+         checks=["rc:128", "err~:must be run in a work tree"]),
+    Case("cd/root-posix",
+         runs=[["-C", "{ROOT_POSIX}", "status"]],
+         checks=["rc:128", "err~:not a git repository",
+                 "err!~:cannot change to"]),
+    Case("cd/root-mnt",
+         runs=[["-C", "{ROOT_MNT}", "status"]],
+         checks=["rc:128", "err~:not a git repository",
+                 "err!~:cannot change to"]),
+    Case("cd/root-cygdrive",
+         runs=[["-C", "{ROOT_CYG}", "status"]],
+         checks=["rc:128", "err~:not a git repository",
+                 "err!~:cannot change to"]),
+    Case("cd/bare-tmp",
+         runs=[["-C", "/tmp", "status"]],
+         checks=["rc:128", "err~:not a git repository",
+                 "err!~:cannot change to"]),
+    Case("cd/nonrepo-posix",
+         runs=[["-C", "{BASE_POSIX}", "status"]],
+         checks=["rc:128", "err~:not a git repository",
+                 "err!~:cannot change to"]),
+    Case("cd/nonrepo-mnt",
+         runs=[["-C", "{BASE_MNT}", "status"]],
+         checks=["rc:128", "err~:not a git repository",
+                 "err!~:cannot change to"]),
+    Case("cd/nonrepo-cygdrive",
+         runs=[["-C", "{BASE_CYG}", "status"]],
+         checks=["rc:128", "err~:not a git repository",
+                 "err!~:cannot change to"]),
+    Case("cd/missing-mnt",
+         runs=[["-C", "/mnt/d/niugit18-no-such-dir", "status"]],
+         checks=["rc:128",
+                 "err~:cannot change to '/mnt/d/niugit18-no-such-dir'"]),
+    Case("cd/missing-cygdrive",
+         runs=[["-C", "/cygdrive/d/niugit18-no-such-dir", "status"]],
+         checks=["rc:128",
+                 "err~:cannot change to '/cygdrive/d/niugit18-no-such-dir'"]),
+    Case("cd/missing-tmp",
+         runs=[["-C", "/tmp/niugit18-no-such-dir", "status"]],
+         checks=["rc:128",
+                 "err~:cannot change to '/tmp/niugit18-no-such-dir'"]),
 ]
 
 
@@ -236,8 +369,20 @@ def main(only=None):
                 repo = make_repo(base, f"{c.name.replace('/', '_')}.{side}",
                                  setup_files=c.setup_files)
                 run(real, ["init", "-q", "-b", "main"], repo)
+                forms = dialect_forms(repo, "REPO")
+                forms.update(dialect_forms(base, "BASE"))
+                forms["{ROOT_POSIX}"] = "/" + repo[0]
+                forms["{ROOT_MNT}"] = "/mnt/" + repo[0]
+                forms["{ROOT_CYG}"] = "/cygdrive/" + repo[0]
+                tail = os.path.relpath(repo, tempfile.gettempdir())
+                if not tail.startswith(".."):
+                    forms["{REPO_TMP}"] = "/tmp/" + tail.replace("\\", "/")
+                cwd = repo
+                if c.cwd_alt_drive:
+                    cwd = alt_drive_dir(repo) or repo
                 for args in c.runs:
-                    results[side] = run(exe, args, repo, env=c.env)
+                    results[side] = run(exe, substitute(args, forms),
+                                        cwd, env=c.env)
                 states[side] = repo_state(repo, real)
             # 1. absolute message-byte assertions (catches shared-stack bugs).
             # git's default commit-message cleanup strips buffer-trailing
@@ -291,6 +436,8 @@ def main(only=None):
     finally:
         time.sleep(0.2)
         shutil.rmtree(base, ignore_errors=True)
+        for d in _alt_cwd_dirs:
+            shutil.rmtree(d, ignore_errors=True)
     print(f"\n== test-launcher: {total - failures}/{total} passed ==")
     return 1 if failures else 0
 

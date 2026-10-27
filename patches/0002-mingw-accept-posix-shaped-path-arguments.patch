@@ -1,8 +1,8 @@
 diff --git a/compat/mingw.c b/compat/mingw.c
-index 92946af..599e1fe 100644
+index 9c5a514..a0b7748 100644
 --- a/compat/mingw.c
 +++ b/compat/mingw.c
-@@ -4385,6 +4385,89 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
+@@ -4396,6 +4396,172 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  #endif
  #endif
  
@@ -15,54 +15,137 @@ index 92946af..599e1fe 100644
 + *
 + *   - it looks like "/x/..." or "/x" with x a single letter
 + *     (drive-backed POSIX path), or like "/x:/..." / "/x:" (leading
-+ *     slash + drive prefix), and
++ *     slash + drive prefix),
++ *   - it spells the same drive through one of the family's other
++ *     mount prefixes, "/mnt/x/..." or "/cygdrive/x/..." (the forms
++ *     rubash and WinuxCmd accept for the same drive), or
++ *   - it is "/tmp" or "/tmp/...", and
 + *   - the literal path does not exist, but the converted Windows path
-+ *     ("x:/...", "x:/", "x:/...") does.
++ *     ("x:/...", "x:/", the temp directory) does.
++ *
++ * "/tmp" is the one form whose existence check is one-sided: the
++ * family mounts /tmp on the session temp directory (%TEMP%), so the
++ * converted candidate is checked, but the literal "<cwd-drive>:\tmp"
++ * must not veto the rewrite -- that drive-root fallback is exactly
++ * the cwd-dependent landing the mount replaces, and in the family
++ * dialect "/tmp" always names the temp mount. Bare-slash prefixes
++ * with no family mount ("/usr/bin", ...) deliberately keep the
++ * native drive-root fallback.
 + *
 + * Anything else is passed through untouched; when both spellings fail
 + * to exist the original literal is kept so error messages and pathspecs
 + * stay unchanged.
++ *
++ * unixwin/niu-git#18.
 + */
++static int wargv_is_drive_letter(wchar_t c)
++{
++	return (L'a' <= c && c <= L'z') || (L'A' <= c && c <= L'Z');
++}
++
++/*
++ * "/mnt/<x>/..." and "/cygdrive/<x>/..." mount the drive <x> exactly
++ * like "/<x>/..." does; return a pointer at the drive letter, or NULL
++ * when arg is not one of those forms.
++ */
++static const wchar_t *wargv_mount_drive(const wchar_t *arg)
++{
++	if (!wcsncmp(arg, L"/mnt/", 5))
++		arg += 5;
++	else if (!wcsncmp(arg, L"/cygdrive/", 10))
++		arg += 10;
++	else
++		return NULL;
++	if (wargv_is_drive_letter(arg[0]) && (arg[1] == L'/' || !arg[1]))
++		return arg;
++	return NULL;
++}
++
++static int wargv_is_tmp_form(const wchar_t *arg)
++{
++	return !wcsncmp(arg, L"/tmp", 4) && (arg[4] == L'/' || !arg[4]);
++}
++
 +static int wargv_looks_like_posix_path(const wchar_t *arg)
 +{
-+	wchar_t c;
-+
 +	if (arg[0] != L'/' || !arg[1])
 +		return 0;
-+	c = arg[1];
-+	if (!((L'a' <= c && c <= L'z') || (L'A' <= c && c <= L'Z')))
-+		return 0;
-+	/* "/x/..." or "/x" */
-+	if (arg[2] == L'/' || !arg[2])
-+		return 1;
-+	/* "/x:/..." or "/x:" */
-+	if (arg[2] == L':' && (arg[3] == L'/' || !arg[3]))
-+		return 1;
-+	return 0;
++	if (wargv_is_drive_letter(arg[1])) {
++		/* "/x/..." or "/x" */
++		if (arg[2] == L'/' || !arg[2])
++			return 1;
++		/* "/x:/..." or "/x:" */
++		if (arg[2] == L':' && (arg[3] == L'/' || !arg[3]))
++			return 1;
++	}
++	/* "/mnt/x/...", "/cygdrive/x/...", "/tmp", "/tmp/..." */
++	return wargv_mount_drive(arg) != NULL || wargv_is_tmp_form(arg);
++}
++
++static wchar_t *wargv_convert_posix_path(const wchar_t *arg)
++{
++	const wchar_t *mount;
++	wchar_t *converted;
++
++	if (wargv_is_tmp_form(arg)) {
++		wchar_t tmp[MAX_PATH];
++		DWORD n = GetTempPathW(ARRAY_SIZE(tmp), tmp);
++		size_t len;
++
++		if (!n || n >= ARRAY_SIZE(tmp))
++			return NULL;
++		/* the temp path ends in a separator; drop it so the
++		 * "/..." remainder can be appended verbatim */
++		while (n > 1 && (tmp[n - 1] == L'\\' || tmp[n - 1] == L'/'))
++			tmp[--n] = L'\0';
++		len = n + wcslen(arg + 4);
++		converted = malloc_startup((len + 1) * sizeof(wchar_t));
++		wcscpy(converted, tmp);
++		wcscat(converted, arg + 4);
++		return converted;
++	}
++	mount = wargv_mount_drive(arg);
++	if (mount) {
++		/* "/mnt/x/rest" -> "x:/rest"; "/mnt/x" -> "x:/" */
++		converted = malloc_startup((wcslen(mount) + 3) *
++					   sizeof(wchar_t));
++		converted[0] = mount[0];
++		converted[1] = L':';
++		wcscpy(converted + 2, mount[1] ? mount + 1 : L"/");
++		return converted;
++	}
++	if (arg[2] == L':') {
++		/* "/x:/rest" -> "x:/rest" */
++		converted = malloc_startup(wcslen(arg) * sizeof(wchar_t));
++		wcscpy(converted, arg + 1);
++		return converted;
++	}
++	/* "/x/rest" -> "x:/rest"; "/x" -> "x:/" */
++	converted = malloc_startup((wcslen(arg) + 2) * sizeof(wchar_t));
++	converted[0] = arg[1];
++	converted[1] = L':';
++	wcscpy(converted + 2, arg[2] ? arg + 2 : L"/");
++	return converted;
 +}
 +
 +static const wchar_t *maybe_convert_posix_path_arg(const wchar_t *arg)
 +{
-+	size_t len = wcslen(arg);
 +	wchar_t *converted;
-+	DWORD attrs;
 +
 +	if (!wargv_looks_like_posix_path(arg))
 +		return arg;
-+	attrs = GetFileAttributesW(arg);
-+	if (attrs != INVALID_FILE_ATTRIBUTES)
++	/*
++	 * A literal that already names an existing path wins, except
++	 * for the "/tmp" form (see the header comment): there the
++	 * literal's existence is the drive-root fallback itself.
++	 */
++	if (!wargv_is_tmp_form(arg) &&
++	    GetFileAttributesW(arg) != INVALID_FILE_ATTRIBUTES)
 +		return arg;
 +
-+	converted = malloc_startup((len + 2) * sizeof(wchar_t));
-+	if (arg[2] == L':') {
-+		/* "/x:/rest" -> "x:/rest" */
-+		wcscpy(converted, arg + 1);
-+	} else {
-+		/* "/x/rest" -> "x:/rest"; "/x" -> "x:/" */
-+		converted[0] = arg[1];
-+		converted[1] = L':';
-+		wcscpy(converted + 2, arg[2] ? arg + 2 : L"/");
-+	}
++	converted = wargv_convert_posix_path(arg);
++	if (!converted)
++		return arg;
 +	if (GetFileAttributesW(converted) == INVALID_FILE_ATTRIBUTES) {
 +		free(converted);
 +		return arg;
@@ -92,17 +175,19 @@ index 92946af..599e1fe 100644
  /*
   * We implement wmain() and compile with -municode, which would
   * normally ignore main(), but we call the latter from the former
-@@ -4422,7 +4505,8 @@ int wmain(int argc, const wchar_t **wargv)
+@@ -4433,7 +4599,10 @@ int wmain(int argc, const wchar_t **wargv)
  	/* determine size of argv and environ conversion buffer */
  	maxlen = wcslen(wargv[0]);
  	for (i = 1; i < argc; i++)
 -		maxlen = max(maxlen, wcslen(wargv[i]));
-+		/* +1: POSIX path conversion can grow an argument by one char */
-+		maxlen = max(maxlen, wcslen(wargv[i]) + 1);
++		/* POSIX path conversion can grow an argument: the drive
++		 * forms by one char, the "/tmp" form by up to the whole
++		 * temp directory path (bounded by MAX_PATH) */
++		maxlen = max(maxlen, wcslen(wargv[i]) + 1 + MAX_PATH);
  
  	/* allocate buffer (wchar_t encodes to max 3 UTF-8 bytes) */
  	maxlen = 3 * maxlen + 1;
-@@ -4435,8 +4519,15 @@ int wmain(int argc, const wchar_t **wargv)
+@@ -4446,8 +4615,15 @@ int wmain(int argc, const wchar_t **wargv)
  	 */
  	ALLOC_ARRAY(argv, argc + 1);
  	ALLOC_ARRAY(save, argc + 1);

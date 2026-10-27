@@ -198,6 +198,46 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # The launcher suite runs last in this job on purpose: it is the
+      # newest gate, and its failure must not starve the layout check,
+      # the upstream subset, the TLS smoke or the packaged artifact of
+      # their evidence (a failing step fails the job either way).
+      - name: Show the runner layout for the launcher suite (x64)
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          # The issue #18 /tmp pins discriminate on the cwd drive, so the
+          # run log has to show which drives the runner actually has and
+          # where %TEMP% lives; without this a pass cannot be told from
+          # the alt-drive pin silently falling back to the repo drive.
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host "TEMP=$env:TEMP"
+          python --version
+
+      - name: Run the launcher differential suite (x64)
+        if: matrix.arch == 'x64'
+        shell: cmd
+        env:
+          NIUGIT_VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
+          # The suite's payloads are bytes on purpose (message bytes are
+          # asserted byte-exact in HEAD). Windows CPython's default mbcs
+          # fsdecode cannot round-trip arbitrary UTF-8 bytes into argv,
+          # so the interpreter itself would mojibake CJK/emoji payloads
+          # before the product ever sees them; UTF-8 mode makes bytes
+          # mean bytes, which is the harness's design premise.
+          PYTHONUTF8: "1"
+        run: |
+          call "${{ steps.locate_vcvars.outputs.vcvars_path }}" ${{ matrix.vcvars_arg }}
+          if errorlevel 1 exit /b 1
+          rem The flat layout ships no root launcher (collect() removes
+          rem it), but test-launcher.py compares the entry launcher
+          rem against the real binary inside the dist tree; rebuild just
+          rem the launcher into dist/ for the suite. The package step
+          rem only zips mingw64 + etc, so the artifact is unchanged.
+          python scripts/build.py --entry-only
+          if errorlevel 1 exit /b 1
+          python scripts/test-launcher.py
+
   # The arm64 binary cannot run on the x64 runners, so a native ARM64 runner
   # proves it actually starts. windows-11-arm is a preview image: keep it
   # non-blocking until it is reliably available.
