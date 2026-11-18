@@ -90,6 +90,18 @@ vcpkg into a MinGit-style `dist/`. `src/` is fetched, never committed.
 
 ## Release
 
+- **Packaging is deduped (issue #23)**: `scripts/package.py` writes two
+  archives per arch — the deduped `niu-git-<version>-<arch>.zip` (one
+  physical copy per unique content + `links.json` at the zip root, ~17 MB
+  for x64) and the fully expanded `-compat.zip` (old layout). The release
+  job attaches both; CI verifies the pair with `package.py --verify`
+  (deduped + materialised hardlinks must be byte-identical to compat).
+  `scripts/test-package.py` covers the packager on Linux and Windows.
+  **Until WinuxCmd#1835 (wpm links support) lands, the wpm-source index
+  entry must take the -compat.zip's sha256/size** — the deduped zip's
+  dashed forms only exist after the installer materialises links.json.
+  Consumers that plain-unzip (niubash's packager, old wpm) also use the
+  compat archive until they implement links.
 - Merge the CI branch to `master`, then tag `v<upstream version>.<counter>`
   (e.g. `v2.56.0.1` on the `2.56.0.windows.2` baseline) **on the merged
   master commit** and push the tag. The tag run builds both assets, publishes

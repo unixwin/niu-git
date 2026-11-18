@@ -16,6 +16,14 @@ Phase 0 PoC **done**: MSVC + CMake + vcpkg build of git-for-windows v2.55.0.wind
 - Bundle: 29 MB / zip 33 MB (MinGit zip: 37 MB) — zlib/iconv linked
   statically (no `zlib1.dll`/`iconv-2.dll` in `git.exe`), no MSYS2, no
   openssl, no perl
+- Archive dedup (issue #23): the release zip stores each unique file once
+  plus a `links.json` manifest (target → canonical copy) that the
+  installer materialises as hardlinks; a fully expanded `-compat.zip` is
+  published alongside for installers that cannot consume the manifest
+  yet. x64 drops from 34.8 MB to ~16.6 MB with the installed tree
+  byte-identical (`python scripts/package.py --verify <deduped> <compat>`,
+  covered by `scripts/test-package.py`). Until wpm gains links support
+  (unixwin/WinuxCmd#1835) the wpm index points at the `-compat.zip`.
 - Patch #1: tolerate stale `http.sslBackend` from other Git distributions on
   single-backend (schannel) builds — warn + fall back instead of dying
 - Patch #2: accept POSIX-shaped path arguments (`/d/repo/...`) via

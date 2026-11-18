@@ -180,13 +180,27 @@ jobs:
         shell: pwsh
         run: |
           $dist = if ("${{ matrix.arch }}" -eq "x64") { "dist" } else { "dist-${{ matrix.arch }}" }
-          $zip = "niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}.zip"
-          Remove-Item -LiteralPath (Join-Path $dist $zip) -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path (Join-Path $dist "mingw64"), (Join-Path $dist "etc") `
-                           -DestinationPath (Join-Path $dist $zip) -Force
-          $item = Get-Item (Join-Path $dist $zip)
-          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash.ToLowerInvariant()
-          Write-Host ("{0}: {1} bytes, sha256 {2}" -f $zip, $item.Length, $sha)
+          # scripts/package.py (issue #23) writes both archives into $dist:
+          #   niu-git-<version>-<arch>.zip          deduped (one copy per
+          #     unique content + links.json at the root)
+          #   niu-git-<version>-<arch>-compat.zip   fully expanded, old layout
+          # It prints both sizes and sha256s; the compat sha256 is what the
+          # wpm-source index takes until WinuxCmd#1835 (wpm links support).
+          python scripts/package.py $dist `
+            --version ${{ steps.upstream.outputs.version }} `
+            --arch ${{ matrix.arch }}
+          if ($LASTEXITCODE -ne 0) { throw "package failed for $dist" }
+
+      - name: Verify the packaged archives (${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          $dist = if ("${{ matrix.arch }}" -eq "x64") { "dist" } else { "dist-${{ matrix.arch }}" }
+          $stem = "niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}"
+          # Expands the deduped archive, materialises its links as real
+          # hardlinks, and requires the tree to be byte-identical to the
+          # compat archive (also proves os.link works on the NTFS runner).
+          python scripts/package.py --verify "$dist\$stem.zip" "$dist\$stem-compat.zip"
+          if ($LASTEXITCODE -ne 0) { throw "package verify failed for $dist" }
 
       - name: Upload the build artifact
         uses: actions/upload-artifact@v7
@@ -194,7 +208,9 @@ jobs:
           name: niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}
           path: |
             dist/niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}.zip
+            dist/niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}-compat.zip
             dist-${{ matrix.arch }}/niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}.zip
+            dist-${{ matrix.arch }}/niu-git-${{ steps.upstream.outputs.version }}-${{ matrix.arch }}-compat.zip
           retention-days: 1
           if-no-files-found: error
 
@@ -296,7 +312,11 @@ jobs:
             *Compared with Git Bash* sections for the measured tables.
 
             Assets: `niu-git-${{ needs.build.outputs.version }}-x64.zip` and
-            `niu-git-${{ needs.build.outputs.version }}-arm64.zip`.
+            `niu-git-${{ needs.build.outputs.version }}-arm64.zip` (deduped:
+            one physical copy per unique file plus a `links.json` manifest;
+            the installer materialises the links as hardlinks), plus the
+            `-compat.zip` pair with the fully expanded layout for installers
+            that cannot consume the manifest yet (see issue #23).
 
             Upgrading an existing install (needs WinuxCmd/wpm 1.1.10+):
 
@@ -359,6 +379,11 @@ jobs:
               template = json.load(fh)
           artifacts = {}
           for arch in ("x64", "arm64"):
+              # The glob matches only the deduped zip, never the -compat.zip.
+              # Do not switch the index to the deduped asset until
+              # WinuxCmd#1835 (wpm links support) lands: until then the
+              # index entry takes the -compat.zip's sha256/size instead
+              # (update by hand, see AGENTS.md).
               hits = glob.glob(f"artifacts/**/niu-git-{version}-{arch}.zip", recursive=True)
               if not hits:
                   continue
