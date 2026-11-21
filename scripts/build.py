@@ -550,19 +550,20 @@ def collect():
     # The bundled curl supports schannel only; make it the default so plain
     # `git clone https://...` works out of the box.
     #
-    # Deliberately no credential.helper here. git consults helpers in
-    # system -> global -> local order, so a system-level default would run
-    # *before* a helper the user configured themselves (a host-scoped
-    # credential.<url>.helper, Git Credential Manager, `gh auth
-    # git-credential`, ...); if it happened to hold a stale entry for that
-    # host it would answer first. The helper binary ships anyway
-    # (build_wincred below), so `git config --global credential.helper
-    # wincred` is a zero-download option and the niu setup wizard can offer it
-    # once instead of us changing someone's credential behavior silently.
+    # credential.helper=wincred is the system default (unixwin/niubash#1061):
+    # the bundled helper reads the git:<protocol>://<host> entries already
+    # in the Windows Credential Manager (the names Git Credential Manager
+    # writes), so HTTPS auth works out of the box for users coming from
+    # Git for Windows. Helpers chain system -> global -> local and git
+    # stops at the first answer, so a user's own helper is only shadowed
+    # when wincred actually holds an entry for that host; an empty
+    # credential.helper= in user config resets the chain back to prompting.
     etc = DIST / "etc"
     etc.mkdir(parents=True, exist_ok=True)
     (etc / "gitconfig").write_text(
-        "[http]\n\tsslBackend = schannel\n", encoding="utf-8", newline="\n")
+        "[http]\n\tsslBackend = schannel\n"
+        "[credential]\n\thelper = wincred\n",
+        encoding="utf-8", newline="\n")
 
 
 def main():

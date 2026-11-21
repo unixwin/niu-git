@@ -43,10 +43,12 @@ vcpkg into a MinGit-style `dist/`. `src/` is fetched, never committed.
   `contrib/credential/wincred`), the perl commands under their **dashed**
   names (the `.perl` name alone is not what git looks up), and
   `etc/gitconfig` with `[http] sslBackend = schannel`.
-- Deliberately **no** `credential.helper` in `etc/gitconfig`: git consults
-  helpers system → global → local, so a system default would answer before a
-  helper the user configured (`gh auth git-credential`, GCM, …). The helper
-  binary ships; the recipe is documented in the README.
+- `etc/gitconfig` sets `credential.helper = wincred` (unixwin/niubash#1061):
+  the bundled helper reads GCM's entries in the Windows Credential Manager,
+  so HTTPS auth works out of the box after migrating from Git for Windows.
+  Helpers chain system → global → local and git stops at the first answer,
+  so a user's own helper is only shadowed when wincred holds an entry for
+  that host; `credential.helper=` (empty) in user config resets the chain.
 
 ## Patches
 

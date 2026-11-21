@@ -74,7 +74,9 @@ def fixture(dist):
     write(dist / "mingw64" / "bin" / "libcurl.dll", os.urandom(40000))
     write(dist / "mingw64" / "libexec" / "git-core" / "git-credential-wincred.exe",
           os.urandom(15000))
-    write(dist / "etc" / "gitconfig", b"[http]\n\tsslBackend = schannel\n")
+    write(dist / "etc" / "gitconfig",
+          b"[http]\n\tsslBackend = schannel\n"
+          b"[credential]\n\thelper = wincred\n")
     write(dist / "mingw64" / "share" / "git-core" / "templates" / "info" / "exclude",
           b"# exclude\n")
     return {"git": git, "remote": remote, "shell": shell}
