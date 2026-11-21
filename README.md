@@ -84,7 +84,7 @@ that [niubash](https://github.com/unixwin/niubash) provides.
 | perl commands (`send-email`, `svn`, `cvs*`) | bundled with perl | not available |
 | `git grep -P` (PCRE2) | yes | no — use winuxcmd's `grep -P` instead |
 | git-gui / gitk (Tcl/Tk) | bundled | not shipped |
-| credential helper | Git Credential Manager in the system gitconfig | not configured by default (see below) |
+| credential helper | Git Credential Manager in the system gitconfig | bundled `wincred` helper in the system gitconfig (see below) |
 | ARM64 | yes | x64 only (so far) |
 
 `git --version` carries both the upstream suffix and our marker
@@ -92,25 +92,24 @@ that [niubash](https://github.com/unixwin/niubash) provides.
 well as the base — a bare `2.55.0` was what upstream's fallback produced
 because the tarball ships no `version` file.
 
-Credentials: a helper you configured yourself works unchanged — niu-git
-reads the same user config, so a host-scoped `credential.<url>.helper`, Git
-Credential Manager, or `gh auth git-credential` keeps answering exactly as
-it did. Only a helper that lived in Git Bash's *system* gitconfig
-(`credential.helper=manager` there) is invisible to niu-git; for that case
-the bundle ships git's own tiny `wincred` helper (172 KB, built from
-`contrib/credential/wincred`), which reads the
-`git:<protocol>://<host>` entries already in the Windows Credential Manager
-(the names Git Credential Manager writes):
+Credentials: niu-git's system gitconfig sets `credential.helper=wincred` —
+git's own tiny helper (172 KB, built from `contrib/credential/wincred`),
+which reads the `git:<protocol>://<host>` entries already in the Windows
+Credential Manager (the names Git Credential Manager writes). Credentials
+stored by Git for Windows' GCM therefore keep answering after you migrate.
+
+Helpers chain system -> global -> local and git stops at the first answer,
+so a helper you configured yourself (a host-scoped
+`credential.<url>.helper`, Git Credential Manager, `gh auth
+git-credential`, ...) keeps working — it is only shadowed when wincred
+actually holds an entry for that host. To pick a different helper, or to go
+back to prompting:
 
 ```
-git config --global credential.helper wincred                    # the bundled helper
-git config --global credential.helper manager                    # or Git Credential Manager, if installed
+git config --global credential.helper manager                    # Git Credential Manager, if installed
 git config --global credential.helper '!gh auth git-credential' # or GitHub CLI tokens
+git config --global credential.helper ''                        # or disable the bundled default
 ```
-
-niu-git deliberately sets no credential helper in its system gitconfig: git
-consults helpers in system -> global -> local order, so a system default
-would run *before* a helper you chose yourself.
 
 ## Argv fidelity test
 
